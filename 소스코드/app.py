@@ -59,7 +59,7 @@ else:
     MONO = "DejaVu Sans Mono"
 
 NVIDIA_URL = "https://build.nvidia.com"
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 
 DTYPE_LABELS = {
     "framework": "분석틀", "tree": "계층·분류", "flowchart": "흐름·절차",
@@ -116,7 +116,7 @@ USAGE_TIPS = [
     "문서(PDF·docx·txt)를 📎로 첨부하거나, 아래에 연구 내용을 직접 써서 보내세요.",
     "예) \"교사 스트레스가 소진을 거쳐 교직 후회에 이르는 경로모형 그려줘\"",
     "그림이 나오면 박스·화살표·제목을 클릭해 바로 수정하세요 (Enter=저장, 바깥 클릭=저장, Esc=취소).",
-    "드래그=위치 이동 · Shift+박스 드래그=새 화살표 · Ctrl+휠=확대 · 우하단 ◢=출력 크기.",
+    "드래그=이동 · Shift+박스 드래그=새 화살표 · Ctrl+Z=되돌리기 · Ctrl+휠=확대 · ◢=출력 크기.",
     "말로도 수정됩니다: \"3번 박스 이름 바꿔\", \"트리형으로 바꿔줘\"",
 ]
 
@@ -172,6 +172,7 @@ class App(tk.Tk):
         self._px_per_unit = 1.0        # 캔버스 픽셀 / viewBox 단위
         self._drag = None              # 진행 중 드래그 상태
         self._editor = None            # 열려 있는 수정창 (한 번에 하나)
+        self._undo = []                # 편집 되돌리기 스택 (스펙 스냅샷)
         self._hover_id = None          # 마우스 오버 중인 노드 id
         self._pending_keep = None      # 수정지시 시 유지할 offsets/size_scale
 
@@ -294,6 +295,7 @@ class App(tk.Tk):
         self.send_btn.pack(side="right", fill="y", padx=(4, 6), pady=6)
         self.send_btn.bind("<Button-1>", lambda e: self._on_send_click())
         self.bind("<Escape>", lambda e: self.cancel())
+        self.bind("<Control-z>", self._on_ctrl_z)
         tk.Label(ibar, text=" 입력 ▸", bg=C_BG2, fg=C_GREEN_TX,
                  font=(MONO, 11, "bold")).pack(side="left", anchor="n", pady=12)
         self.inp = tk.Text(ibar, bg=C_BG2, fg=C_TEXT, font=(MONO, 11), height=3, wrap="word",
@@ -340,6 +342,7 @@ class App(tk.Tk):
             ("PNG 저장", lambda: self.save_output("png"), "이미지(PNG)로 저장"),
             ("브라우저 보기", self.open_browser, "시스템 브라우저로 크게 미리보기"),
             ("다시 그리기", self.redraw, "같은 내용으로 다시 그리기(재요청)"),
+            ("↩ 되돌리기", self.undo_action, "직전 편집 취소 — 화살표·이동·수정·삭제 (Ctrl+Z)"),
             ("새 도식", self.new_diagram, "현재 도식을 잊고 새 주제로 시작"),
             ("배치 초기화", self.reset_layout, "드래그 이동·크기 조절을 원래 자동 배치로 되돌림"),
         ]:
@@ -462,6 +465,7 @@ class App(tk.Tk):
         """현재 도식·문서를 초기화 — 이후 입력은 수정지시가 아닌 새 도식 요청으로 처리."""
         if self.busy:
             return
+        self._push_undo()      # 실수로 눌러도 Ctrl+Z로 복귀
         self.current_spec = None; self.current_svg = None; self.last_document = None
         self.current_hits = []; self.current_edge_hits = []
         self._preview_img = None
@@ -589,6 +593,7 @@ class App(tk.Tk):
                       "예) \"학부모 스트레스와 업무 과부하가 소진을 거쳐 교직 후회로 이어지는 경로모형\"", "sys")
             return
 
+        self._push_undo()      # AI가 그림을 갈아끼우기 전 상태도 Ctrl+Z로 복귀 가능
         # 수정지시였다면 기존 드래그 배치·배율을 유지 (AI가 스펙에 남겼으면 그대로)
         if self._pending_keep:
             for k, v in self._pending_keep.items():
@@ -880,6 +885,7 @@ class App(tk.Tk):
                 return
             s = self._px_per_unit
             nid = d["hit"]["id"]
+            self._push_undo()
             off = self.current_spec.setdefault("offsets", {})
             odx, ody = off.get(nid, [0, 0])
             off[nid] = [round(odx + dx / s, 1), round(ody + dy / s, 1)]
@@ -894,6 +900,7 @@ class App(tk.Tk):
         elif d["mode"] == "resize":
             c.delete("szinfo")
             if "new_scale" in d:
+                self._push_undo()
                 self.current_spec["size_scale"] = round(d["new_scale"], 2)
                 self._rerender_local(f"출력 크기 배율 {d['new_scale']:.2f}× — SVG·PNG 저장 크기에 반영")
         elif d["mode"] == "connect":
@@ -907,6 +914,7 @@ class App(tk.Tk):
             dup = next((ed for ed in spec.get("edges", [])
                         if ed.get("from") == src_id and ed.get("to") == target["id"]), None)
             if dup is None:
+                self._push_undo()
                 spec.setdefault("edges", []).append(
                     {"from": src_id, "to": target["id"], "style": "solid"})
                 self._rerender_local(f"화살표 추가: {src_id} → {target['id']}")
@@ -980,10 +988,14 @@ class App(tk.Tk):
                 tog_state["v"] = values[(i + 1) % len(values)]
                 tog_btn.configure(text=labels[tog_state["v"]])
             tog_btn.bind("<Button-1>", cycle)
-        del_btn = tk.Label(wrap, text="🗑", bg="#ffffff", fg=C_RED, cursor="hand2",
-                           font=(MONO, 11), padx=6)
-        del_btn.pack(side="right", fill="y")
+        del_btn = tk.Label(wrap, text="삭제", bg="#fdecea", fg=C_RED, cursor="hand2",
+                           font=(MONO, 10, "bold"), padx=8)
+        del_btn.pack(side="right", fill="y", padx=(2, 0))
         _Tooltip(del_btn, del_tip)
+        # 수정창이 미리보기 밖으로 잘리지 않게 위치 보정
+        cw, chh = c.winfo_width(), c.winfo_height()
+        cx = min(max(cx, width / 2 + 4), max(cw - width / 2 - 4, width / 2 + 4))
+        cy = min(max(cy, 22), max(chh - 30, 22))
         win = c.create_window(cx, cy, window=wrap, width=width)
         done_flag = {"done": False}
 
@@ -1004,6 +1016,7 @@ class App(tk.Tk):
                 if cjk:
                     self._log(f"⚠️ 입력에 한자/가나가 있습니다: {cjk[0]}", "warn")
                     break
+            self._push_undo()
             if tog_state is not None:
                 on_save(vals, tog_state["v"])
             else:
@@ -1013,6 +1026,7 @@ class App(tk.Tk):
             if done_flag["done"]:
                 return
             close()
+            self._push_undo()
             on_delete()
 
         del_btn.bind("<Button-1>", delete_it)
@@ -1043,7 +1057,7 @@ class App(tk.Tk):
                 spec.pop(special_key, None)
                 self._rerender_local(f"{what} 삭제됨")
 
-            self._open_editor(cx, cy, max(220, gx2 - gx1 + 46),
+            self._open_editor(cx, cy, max(280, gx2 - gx1 + 90),
                               [("v", spec.get(special_key) or "", "")],
                               save_special, del_special, f"{what} 완전 삭제")
             return
@@ -1069,7 +1083,7 @@ class App(tk.Tk):
             self._rerender_local(f"노드 삭제: {node.get('label', nid)} (연결 화살표 포함)")
 
         # 큰 글씨(라벨)와 작은 글씨(부제)를 한 창에서 같이 수정
-        self._open_editor(cx, cy, max(240, gx2 - gx1 + 70),
+        self._open_editor(cx, cy, max(320, gx2 - gx1 + 120),
                           [("label", node.get("label") or "", "라벨"),
                            ("sub", node.get("sub") or "", "부제")],
                           save_node, del_node, "노드 완전 삭제 (연결 화살표도 함께)")
@@ -1108,7 +1122,7 @@ class App(tk.Tk):
                 pass
             self._rerender_local(f"화살표 삭제: {edge.get('from')} → {edge.get('to')}")
 
-        self._open_editor(ex, ey, 270,
+        self._open_editor(ex, ey, 340,
                           [("label", edge.get("label") or "", "계수")],
                           save_edge, del_edge, "이 화살표 삭제",
                           toggle=(self.EDGE_STYLES, self.EDGE_STYLE_LABEL,
@@ -1135,6 +1149,29 @@ class App(tk.Tk):
                                width=1, dash=(2, 3), tags="hover")
             self._hover_id = hit["id"]
 
+    # ── 편집 되돌리기 (Ctrl+Z) ──
+    def _push_undo(self):
+        """스펙을 바꾸기 직전에 호출 — 현재 상태를 스냅샷으로 저장."""
+        if self.current_spec is not None:
+            self._undo.append(json.loads(json.dumps(self.current_spec, ensure_ascii=False)))
+            if len(self._undo) > 50:
+                self._undo.pop(0)
+
+    def undo_action(self):
+        if getattr(self, "_editor", None):
+            self._close_editor(save=False)
+        if not self._undo:
+            self._log("되돌릴 편집이 없습니다.", "sys")
+            return
+        self.current_spec = self._undo.pop()
+        self._rerender_local("↩ 되돌림 (Ctrl+Z)")
+
+    def _on_ctrl_z(self, e):
+        # 입력칸·수정창에서 글자를 고치는 중이면 도식 되돌리기를 가로채지 않는다
+        if isinstance(e.widget, (tk.Entry, tk.Text)):
+            return
+        self.undo_action()
+
     def _rerender_local(self, msg=None):
         """AI 호출 없이 현재 스펙만 즉시 재렌더 (라벨 수정·드래그·배율)."""
         if not self.current_spec:
@@ -1153,6 +1190,7 @@ class App(tk.Tk):
         """드래그 이동·출력 배율·미리보기 줌을 자동 배치 상태로 되돌린다."""
         if not self.current_spec:
             return
+        self._push_undo()
         self.current_spec.pop("offsets", None)
         self.current_spec.pop("size_scale", None)
         self._view_zoom = 1.0
