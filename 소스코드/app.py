@@ -59,7 +59,7 @@ else:
     MONO = "DejaVu Sans Mono"
 
 NVIDIA_URL = "https://build.nvidia.com"
-APP_VERSION = "0.3.2"
+APP_VERSION = "0.3.3"
 
 DTYPE_LABELS = {
     "framework": "분석틀", "tree": "계층·분류", "flowchart": "흐름·절차",
@@ -113,7 +113,7 @@ GUIDE_STEPS = [
 ]
 
 USAGE_TIPS = [
-    "문서(PDF·docx·txt)를 📎로 첨부하거나, 아래에 연구 내용을 직접 써서 보내세요.",
+    "문서(PDF·Word·HTML·txt)를 📎로 첨부하거나, 아래에 연구 내용을 직접 써서 보내세요.",
     "예) \"교사 스트레스가 소진을 거쳐 교직 후회에 이르는 경로모형 그려줘\"",
     "그림이 나오면 박스·화살표·제목을 클릭해 바로 수정하세요 (Enter=저장, 바깥 클릭=저장, Esc=취소).",
     "드래그=이동 · Shift+박스 드래그=새 화살표 · Ctrl+Z=되돌리기 · Ctrl+휠=확대 · ◢=출력 크기.",
@@ -277,7 +277,7 @@ class App(tk.Tk):
         self.model_btn.pack(side="left", padx=4)
         _Tooltip(self.model_btn, "도식 스펙을 만들 AI 모델 선택 (벤치마크 추천: GPT-OSS)")
         for txt, cmd, tip in [
-            ("📎", self.attach_file, "문서 첨부(PDF·docx·txt) → 내용을 도식으로"),
+            ("📎", self.attach_file, "문서 첨부(PDF·Word·HTML·txt) → 내용을 도식으로"),
             ("🔑", self.change_key, "API 키 변경"),
         ]:
             b = self._btn(right, txt, cmd, padx=9); b.pack(side="left", padx=5)
@@ -485,7 +485,8 @@ class App(tk.Tk):
         if self.busy:
             return
         paths = self._ask_open(multiple=True, title="도식화할 문서 선택",
-                               filetypes=[("지원 문서·이미지", "*.txt *.md *.pdf *.docx *.png *.jpg *.jpeg"),
+                               filetypes=[("지원 문서·이미지",
+                                           "*.txt *.md *.pdf *.docx *.html *.htm *.png *.jpg *.jpeg"),
                                           ("모든 파일", "*.*")])
         if not paths:
             return

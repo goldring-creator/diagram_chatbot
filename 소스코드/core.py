@@ -13,6 +13,7 @@ import time
 import base64
 import urllib.request
 import urllib.error
+from html.parser import HTMLParser
 
 from openai import OpenAI
 import diagram_prompts
@@ -36,7 +37,56 @@ DEFAULT_MODEL = "gpt-oss"
 
 BASE_URL = "https://integrate.api.nvidia.com/v1"
 
-SUPPORTED_NOTE = "읽기 지원: PDF · Word(.docx) · 텍스트(.txt /.md)   ·   한글(.hwp /.hwpx)은 지원 제한"
+SUPPORTED_NOTE = "읽기 지원: PDF · Word(.docx) · HTML · 텍스트(.txt /.md)   ·   한글(.hwp /.hwpx)은 지원 제한"
+
+
+class _HTMLText(HTMLParser):
+    """HTML에서 본문 텍스트만 추출 (script/style 제외, 블록 요소는 줄바꿈)."""
+    # meta·link 같은 void 요소는 닫는 태그가 없어 _SKIP에 넣으면 깊이가 영영 안 내려옴
+    _SKIP = {"script", "style", "head", "noscript"}
+    _BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
+              "table", "section", "article", "ul", "ol", "blockquote"}
+
+    def __init__(self):
+        super().__init__()
+        self._skip_depth = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP:
+            self._skip_depth += 1
+        elif tag in self._BLOCK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP and self._skip_depth > 0:
+            self._skip_depth -= 1
+        elif tag in self._BLOCK:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self._skip_depth and data.strip():
+            self.parts.append(data)
+
+    def text(self) -> str:
+        out = "".join(self.parts)
+        return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
+def _read_html(path: str) -> str:
+    for enc in ("utf-8-sig", "cp949", "euc-kr"):
+        try:
+            with open(path, "r", encoding=enc) as f:
+                raw = f.read()
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            raw = f.read()
+    p = _HTMLText()
+    p.feed(raw)
+    return p.text()
 
 
 # ── 키 저장/로드 ──
@@ -85,6 +135,11 @@ def read_file(path: str):
         if ext in (".txt", ".md"):
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 return f.read(), None
+        if ext in (".html", ".htm"):
+            text = _read_html(path)
+            if not text:
+                return None, "HTML에서 본문 텍스트를 찾지 못했습니다."
+            return text, None
         if ext == ".pdf":
             from pypdf import PdfReader
             reader = PdfReader(path)
@@ -99,7 +154,7 @@ def read_file(path: str):
         if ext in (".hwp", ".hwpx"):
             return None, ("한글 파일(.hwp/.hwpx)은 현재 지원되지 않습니다. "
                           "한글에서 'PDF로 저장' 후 PDF를 첨부해 주세요.")
-        return None, f"지원하지 않는 형식입니다: {ext} (PDF·docx·txt·md만 가능)"
+        return None, f"지원하지 않는 형식입니다: {ext} (PDF·docx·html·txt·md만 가능)"
     except Exception as e:
         return None, f"파일 읽기 오류: {e}"
 
