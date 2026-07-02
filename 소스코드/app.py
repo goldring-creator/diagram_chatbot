@@ -59,7 +59,7 @@ else:
     MONO = "DejaVu Sans Mono"
 
 NVIDIA_URL = "https://build.nvidia.com"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 
 DTYPE_LABELS = {
     "framework": "분석틀", "tree": "계층·분류", "flowchart": "흐름·절차",
@@ -78,7 +78,8 @@ GUIDE_STEPS = [
 USAGE_TIPS = [
     "문서(PDF·docx·txt)를 📎로 첨부하거나, 아래에 연구 내용을 직접 써서 보내세요.",
     "예) \"교사 스트레스가 소진을 거쳐 교직 후회에 이르는 경로모형 그려줘\"",
-    "그림이 나오면 [SVG]·[PNG]로 저장하거나, \"3번 박스 이름 바꿔\"처럼 수정 지시할 수 있어요.",
+    "그림이 나오면 미리보기에서 박스 더블클릭=글자 수정 · 드래그=위치 이동 · Ctrl+휠=확대,",
+    "우하단 ◢ 드래그=출력 크기. 말로도 수정됩니다: \"3번 박스 이름 바꿔\"",
 ]
 
 
@@ -123,8 +124,16 @@ class App(tk.Tk):
         self._cancel = False
         self.current_spec = None       # 마지막 도식 스펙(dict)
         self.current_svg = None        # 마지막 SVG 텍스트
+        self.current_hits = []         # 노드 위치 지도(viewBox 좌표) — 클릭·드래그용
         self.last_document = None      # 마지막으로 그린 원본 문서(재요청용)
         self._preview_img = None       # PhotoImage 참조 유지
+        self._view_zoom = 1.0          # 미리보기 확대 배율(Ctrl+휠)
+        self._pan = [0, 0]             # 미리보기 이동(빈 곳 드래그)
+        self._img_origin = (0, 0)      # 캔버스 안 그림 좌상단 좌표
+        self._px_per_unit = 1.0        # 캔버스 픽셀 / viewBox 단위
+        self._drag = None              # 진행 중 드래그 상태
+        self._hover_id = None          # 마우스 오버 중인 노드 id
+        self._pending_keep = None      # 수정지시 시 유지할 offsets/size_scale
 
         key = core.load_key()
         if core.valid_key_format(key):
@@ -287,25 +296,33 @@ class App(tk.Tk):
         pv_bar.pack(side="bottom", fill="x", pady=(6, 0))
         for txt, cmd, tip in [
             ("SVG 저장", lambda: self.save_output("svg"), "벡터(SVG)로 저장 — 논문·PPT 확대해도 안 깨짐"),
-            ("PNG 저장", lambda: self.save_output("png"), "이미지(PNG)로 저장 — cairosvg 필요"),
+            ("PNG 저장", lambda: self.save_output("png"), "이미지(PNG)로 저장"),
             ("브라우저 보기", self.open_browser, "시스템 브라우저로 크게 미리보기"),
             ("다시 그리기", self.redraw, "같은 내용으로 다시 그리기(재요청)"),
             ("새 도식", self.new_diagram, "현재 도식을 잊고 새 주제로 시작"),
+            ("배치 초기화", self.reset_layout, "드래그 이동·크기 조절을 원래 자동 배치로 되돌림"),
         ]:
             b = self._btn(pv_bar, txt, cmd, bg=C_BG2, padx=10)
             b.pack(side="left", padx=(0, 6))
             _Tooltip(b, tip)
-        self.preview = tk.Label(rwrap, bg=C_PREVIEW_BG, text="여기에 도식 미리보기가 표시됩니다.",
-                                fg="#888888", font=(MONO, 11))
+        self.preview = tk.Canvas(rwrap, bg=C_PREVIEW_BG, highlightthickness=0)
         self.preview.pack(side="top", fill="both", expand=True)
         self.preview.bind("<Configure>", lambda e: self._redraw_preview())
+        self.preview.bind("<Control-MouseWheel>", self._on_pv_wheel)
+        self.preview.bind("<ButtonPress-1>", self._on_pv_press)
+        self.preview.bind("<B1-Motion>", self._on_pv_motion)
+        self.preview.bind("<ButtonRelease-1>", self._on_pv_release)
+        self.preview.bind("<Double-Button-1>", lambda e: self._on_pv_double(e, "label"))
+        self.preview.bind("<Shift-Double-Button-1>", lambda e: self._on_pv_double(e, "sub"))
+        self.preview.bind("<Motion>", self._on_pv_hover)
 
         self._log("도식화 챗봇 준비 완료.", "h")
         self._log(f"모델: {core.MODEL_LABELS[self.model_key]}", "sys")
         for t in USAGE_TIPS:
             self._log("• " + t, "sys")
         if not svg_export.png_available():
-            self._log("안내: PNG 저장은 cairosvg 설치 시 가능합니다(SVG 저장·브라우저 보기는 지금도 가능).", "sys")
+            self._log("안내: 미리보기·PNG 저장은 resvg-py 설치 시 가능합니다: pip install resvg-py "
+                      "(배포판 실행파일에는 내장 — SVG 저장·브라우저 보기는 지금도 가능)", "sys")
 
     # ════════ 모델 선택 ════════
     def _model_label(self):
@@ -370,7 +387,7 @@ class App(tk.Tk):
             self._log("나 ▸ " + text, "user")
             self._start_spec(diagram_prompts.build_revise_user(
                 json.dumps(self.current_spec, ensure_ascii=False), text),
-                document=self.last_document, note="수정 반영 중…")
+                document=self.last_document, note="수정 반영 중…", keep_layout=True)
         else:
             self._log("나 ▸ " + text, "user")
             self._start_spec(diagram_prompts.build_spec_user(text),
@@ -385,8 +402,10 @@ class App(tk.Tk):
         if self.busy:
             return
         self.current_spec = None; self.current_svg = None; self.last_document = None
+        self.current_hits = []
         self._preview_img = None
-        self.preview.configure(image="", text="여기에 도식 미리보기가 표시됩니다.", fg="#888888")
+        self._view_zoom = 1.0; self._pan = [0, 0]
+        self._redraw_preview()
         self._log("새 도식 — 다음 입력은 새 주제로 그립니다.", "sys")
 
     def redraw(self):
@@ -447,14 +466,20 @@ class App(tk.Tk):
             self.after(80, self._poll_attach)
 
     # ════════ 스펙 산출 → 렌더 ════════
-    def _start_spec(self, user_content, document, note):
+    def _start_spec(self, user_content, document, note, keep_layout=False):
         self.busy = True; self._cancel = False; self._set_stop()
         self._anim_note = note; self._anim_i = 0
         self._log_anim_line = None
+        self._pending_document = document
+        # 수정지시일 때는 사용자가 드래그로 만든 배치·배율을 새 스펙에도 이어붙인다
+        self._pending_keep = None
+        if keep_layout and self.current_spec:
+            keep = {k: self.current_spec[k] for k in ("offsets", "size_scale")
+                    if k in self.current_spec}
+            self._pending_keep = keep or None
         threading.Thread(target=self._spec_worker, args=(user_content,), daemon=True).start()
         self.after(60, self._poll_spec)
         self._animate()
-        self._pending_document = document
 
     def _spec_worker(self, user_content):
         spec, raw, err = core.get_spec(self.client, self.model_key, user_content,
@@ -503,10 +528,19 @@ class App(tk.Tk):
                       "예) \"학부모 스트레스와 업무 과부하가 소진을 거쳐 교직 후회로 이어지는 경로모형\"", "sys")
             return
 
+        # 수정지시였다면 기존 드래그 배치·배율을 유지 (AI가 스펙에 남겼으면 그대로)
+        if self._pending_keep:
+            for k, v in self._pending_keep.items():
+                spec.setdefault(k, v)
+            self._pending_keep = None
+
         self.current_spec = spec
         self.last_document = self._pending_document
-        svg, warns = renderer.render(spec)
+        svg, warns, hits = renderer.render(spec)
         self.current_svg = svg
+        self.current_hits = hits
+        self._view_zoom = 1.0
+        self._pan = [0, 0]
 
         dtype = spec.get("diagram_type", "?")
         self._log(f"■ 도식 완성: {DTYPE_LABELS.get(dtype, dtype)} "
@@ -517,46 +551,263 @@ class App(tk.Tk):
             self._log(f"⚠️ 한자/가나 의심 {len(cjk)}건 — {cjk[0]}", "warn")
         for w in warns:
             self._log("⚠️ " + w, "warn")
-        self._log("우측 미리보기에서 확인하고 [SVG]·[PNG]로 저장하세요. "
-                  "\"○○ 바꿔\"처럼 적으면 부분 수정됩니다.", "sys")
+        self._log("미리보기: 더블클릭=글자 수정 · 드래그=이동 · Ctrl+휠=확대 · 우하단 ◢=출력 크기. "
+                  "\"○○ 바꿔\"처럼 말로도 수정됩니다.", "sys")
         self._render_preview_from_svg(svg)
         self._notify("도식 완성", "도식 생성이 완료되었습니다.")
 
-    # ════════ 미리보기 렌더 ════════
+    # ════════ 미리보기 렌더 (Canvas) ════════
+    def _viewbox_wh(self, svg):
+        m = re.search(r'viewBox="0 0 ([\d.]+) ([\d.]+)"', svg)
+        return (float(m.group(1)), float(m.group(2))) if m else (960.0, 560.0)
+
+    def _pv_center_text(self, text):
+        c = self.preview
+        c.delete("all")
+        c.create_text(max(10, c.winfo_width() / 2), max(10, c.winfo_height() / 2),
+                      text=text, fill="#888888", font=(MONO, 11), justify="center")
+
     def _render_preview_from_svg(self, svg):
         self._redraw_preview()
-        # 임베드 미리보기(cairosvg)가 불가하면, 첫 도식은 브라우저로 자동 열어 바로 보여준다
+        # 내장 미리보기가 불가하면, 첫 도식은 브라우저로 자동 열어 바로 보여준다
         if not svg_export.png_available() and not getattr(self, "_auto_browsed", False):
             self._auto_browsed = True
-            self._log("↗ cairosvg가 없어 브라우저로 미리보기를 엽니다. (이후에는 [브라우저 보기] 버튼 사용)", "sys")
+            self._log("↗ PNG 모듈이 없어 브라우저로 미리보기를 엽니다. (이후에는 [브라우저 보기] 버튼 사용)", "sys")
             self.open_browser()
 
     def _redraw_preview(self):
+        c = self.preview
         svg = self.current_svg
         if not svg:
+            self._pv_center_text("여기에 도식 미리보기가 표시됩니다.")
             return
-        pw = max(200, self.preview.winfo_width() - 8)
-        ph = max(150, self.preview.winfo_height() - 8)
-        # viewBox 폭·높이 파악 → 패널에 맞는 배율
-        m = re.search(r'viewBox="0 0 ([\d.]+) ([\d.]+)"', svg)
-        vw, vh = (float(m.group(1)), float(m.group(2))) if m else (960, 560)
-        scale = min(pw / vw, ph / vh)
-        scale = max(0.2, min(scale, 3.0))
-        png, err = svg_export.png_bytes(svg, scale=scale)
+        pw = max(60, c.winfo_width() - 8)
+        ph = max(60, c.winfo_height() - 8)
+        vw, vh = self._viewbox_wh(svg)
+        disp = min(pw / vw, ph / vh) * self._view_zoom          # 화면픽셀/viewBox단위
+        disp = max(0.05, min(disp, 6.0))
+        size_scale = renderer.effective_size_scale(self.current_spec or {})
+        png, err = svg_export.png_bytes(svg, scale=disp / size_scale)
         if err:
-            self.preview.configure(
-                image="", text="미리보기(PNG)에는 cairosvg가 필요합니다.\n"
-                                "[브라우저 보기]로 확인하거나  pip install cairosvg  후 사용하세요.",
-                fg="#666666", compound="center")
+            self._pv_center_text("미리보기(PNG)에는 resvg-py가 필요합니다.\n"
+                                 "[브라우저 보기]로 확인하거나  pip install resvg-py  후 사용하세요.\n"
+                                 "(배포판 실행파일에는 내장되어 있습니다)")
             self._preview_img = None
             return
         try:
-            self._preview_img = tk.PhotoImage(data=base64.b64encode(png).decode())
-            self.preview.configure(image=self._preview_img, text="")
+            img = tk.PhotoImage(data=base64.b64encode(png).decode())
         except Exception:
-            self.preview.configure(image="", text="미리보기를 표시할 수 없습니다. [브라우저 보기]를 이용하세요.",
-                                   fg="#666666")
+            self._pv_center_text("미리보기를 표시할 수 없습니다. [브라우저 보기]를 이용하세요.")
             self._preview_img = None
+            return
+        self._preview_img = img
+        iw, ih = img.width(), img.height()
+        ox = (c.winfo_width() - iw) / 2 + self._pan[0]
+        oy = (c.winfo_height() - ih) / 2 + self._pan[1]
+        self._img_origin = (ox, oy)
+        self._px_per_unit = iw / vw
+        c.delete("all")
+        c.create_image(ox, oy, image=img, anchor="nw", tags="img")
+        # 우하단 출력 크기 핸들(◢)
+        hx, hy = ox + iw, oy + ih
+        c.create_polygon(hx, hy - 14, hx, hy, hx - 14, hy,
+                         fill="#8b949e", outline="", tags="szhandle")
+        self._hover_id = None
+
+    # ── 좌표 변환·판정 ──
+    def _to_svg_xy(self, cx, cy):
+        ox, oy = self._img_origin
+        return (cx - ox) / self._px_per_unit, (cy - oy) / self._px_per_unit
+
+    def _node_canvas_bbox(self, h):
+        ox, oy = self._img_origin
+        s = self._px_per_unit
+        return (ox + h["x"] * s, oy + h["y"] * s,
+                ox + (h["x"] + h["w"]) * s, oy + (h["y"] + h["h"]) * s)
+
+    def _hit_at(self, cx, cy):
+        x, y = self._to_svg_xy(cx, cy)
+        for h in reversed(self.current_hits or []):
+            if h["x"] <= x <= h["x"] + h["w"] and h["y"] <= y <= h["y"] + h["h"]:
+                return h
+        return None
+
+    def _on_size_handle(self, cx, cy):
+        if not self._preview_img:
+            return False
+        ox, oy = self._img_origin
+        hx, hy = ox + self._preview_img.width(), oy + self._preview_img.height()
+        return (hx - 18) <= cx <= (hx + 4) and (hy - 18) <= cy <= (hy + 4)
+
+    # ── 인터랙션: 줌·팬·드래그·더블클릭 수정 ──
+    def _on_pv_wheel(self, e):
+        if not self.current_svg:
+            return
+        factor = 1.1 if e.delta > 0 else 1 / 1.1
+        self._view_zoom = max(0.2, min(4.0, self._view_zoom * factor))
+        self._redraw_preview()
+
+    def _on_pv_press(self, e):
+        if not self.current_svg or self.busy:
+            return
+        c = self.preview
+        if self._on_size_handle(e.x, e.y):
+            self._drag = {"mode": "resize", "x0": e.x, "y0": e.y,
+                          "scale0": renderer.effective_size_scale(self.current_spec or {})}
+            return
+        hit = self._hit_at(e.x, e.y)
+        if hit:
+            gx1, gy1, gx2, gy2 = self._node_canvas_bbox(hit)
+            ghost = c.create_rectangle(gx1, gy1, gx2, gy2, dash=(4, 3),
+                                       outline="#1f6feb", width=2, tags="ghost")
+            self._drag = {"mode": "node", "hit": hit, "x0": e.x, "y0": e.y, "ghost": ghost}
+        else:
+            self._drag = {"mode": "pan", "x0": e.x, "y0": e.y,
+                          "pan0": (self._pan[0], self._pan[1])}
+
+    def _on_pv_motion(self, e):
+        d = self._drag
+        if not d:
+            return
+        c = self.preview
+        if d["mode"] == "node":
+            gx1, gy1, gx2, gy2 = self._node_canvas_bbox(d["hit"])
+            dx, dy = e.x - d["x0"], e.y - d["y0"]
+            c.coords(d["ghost"], gx1 + dx, gy1 + dy, gx2 + dx, gy2 + dy)
+        elif d["mode"] == "pan":
+            dx, dy = e.x - d["x0"], e.y - d["y0"]
+            self._pan[0] = d["pan0"][0] + dx
+            self._pan[1] = d["pan0"][1] + dy
+            self._redraw_preview()
+        elif d["mode"] == "resize":
+            if not self._preview_img:
+                return
+            iw = self._preview_img.width()
+            factor = max(0.3, 1.0 + (e.x - d["x0"]) / max(iw, 1))
+            new_scale = max(0.5, min(2.5, d["scale0"] * factor))
+            d["new_scale"] = new_scale
+            c.delete("szinfo")
+            ox, oy = self._img_origin
+            c.create_rectangle(ox, oy, ox + iw * factor,
+                               oy + self._preview_img.height() * factor,
+                               dash=(4, 3), outline="#1f6feb", tags="szinfo")
+            c.create_text(e.x + 8, e.y - 12, text=f"출력 배율 {new_scale:.2f}×",
+                          anchor="w", fill="#1f6feb", font=(MONO, 10, "bold"), tags="szinfo")
+
+    def _on_pv_release(self, e):
+        d = self._drag
+        self._drag = None
+        if not d:
+            return
+        c = self.preview
+        if d["mode"] == "node":
+            c.delete("ghost")
+            dx, dy = e.x - d["x0"], e.y - d["y0"]
+            if abs(dx) < 3 and abs(dy) < 3:          # 이동 아님(단순 클릭)
+                return
+            s = self._px_per_unit
+            nid = d["hit"]["id"]
+            off = self.current_spec.setdefault("offsets", {})
+            odx, ody = off.get(nid, [0, 0])
+            off[nid] = [round(odx + dx / s, 1), round(ody + dy / s, 1)]
+            self._rerender_local(f"노드 이동: {nid} (원위치는 [배치 초기화])")
+        elif d["mode"] == "resize":
+            c.delete("szinfo")
+            if "new_scale" in d:
+                self.current_spec["size_scale"] = round(d["new_scale"], 2)
+                self._rerender_local(f"출력 크기 배율 {d['new_scale']:.2f}× — SVG·PNG 저장 크기에 반영")
+
+    def _on_pv_double(self, e, field):
+        if not self.current_svg or self.busy:
+            return
+        if self._drag:                                # press로 시작된 드래그 취소
+            self.preview.delete("ghost")
+            self._drag = None
+        hit = self._hit_at(e.x, e.y)
+        if hit:
+            self._begin_pv_edit(hit, field)
+
+    def _begin_pv_edit(self, hit, field):
+        node = next((n for n in (self.current_spec or {}).get("nodes", [])
+                     if n.get("id") == hit["id"]), None)
+        if node is None:
+            return
+        c = self.preview
+        gx1, gy1, gx2, gy2 = self._node_canvas_bbox(hit)
+        entry = tk.Entry(c, font=(MONO, 11), justify="center", bg="#ffffff",
+                         fg="#1A1A1A", insertbackground="#1A1A1A", relief="solid", bd=1)
+        entry.insert(0, node.get(field) or "")
+        win = c.create_window((gx1 + gx2) / 2, (gy1 + gy2) / 2, window=entry,
+                              width=max(130, gx2 - gx1 + 16))
+        entry.focus_set(); entry.select_range(0, "end")
+        self._enable_clipboard(entry)
+        done_flag = {"done": False}
+
+        def done(save):
+            if done_flag["done"]:
+                return
+            done_flag["done"] = True
+            val = entry.get().strip()
+            c.delete(win); entry.destroy()
+            if not save:
+                return
+            cjk = core.check_cjk(val)
+            if cjk:
+                self._log(f"⚠️ 입력에 한자/가나가 있습니다: {cjk[0]}", "warn")
+            if field == "sub" and not val:
+                node.pop("sub", None)
+            else:
+                node[field] = val
+            name = "부제" if field == "sub" else "라벨"
+            self._rerender_local(f"{name} 수정: {val or '(삭제)'}")
+
+        entry.bind("<Return>", lambda ev: done(True))
+        entry.bind("<Escape>", lambda ev: done(False))
+        entry.bind("<FocusOut>", lambda ev: done(False))
+
+    def _on_pv_hover(self, e):
+        if not self.current_svg or self._drag:
+            return
+        hit = self._hit_at(e.x, e.y)
+        c = self.preview
+        if self._on_size_handle(e.x, e.y):
+            c.configure(cursor="bottom_right_corner")
+            c.delete("hover"); self._hover_id = None
+            return
+        if hit is None:
+            if self._hover_id is not None:
+                c.delete("hover"); self._hover_id = None
+            c.configure(cursor="")
+            return
+        c.configure(cursor="hand2")
+        if hit["id"] != self._hover_id:
+            c.delete("hover")
+            c.create_rectangle(*self._node_canvas_bbox(hit), outline="#1f6feb",
+                               width=1, dash=(2, 3), tags="hover")
+            self._hover_id = hit["id"]
+
+    def _rerender_local(self, msg=None):
+        """AI 호출 없이 현재 스펙만 즉시 재렌더 (라벨 수정·드래그·배율)."""
+        if not self.current_spec:
+            return
+        svg, warns, hits = renderer.render(self.current_spec)
+        self.current_svg = svg
+        self.current_hits = hits
+        for w in warns:
+            self._log("⚠️ " + w, "warn")
+        if msg:
+            self._log("✏️ " + msg, "sys")
+        self._redraw_preview()
+
+    def reset_layout(self):
+        """드래그 이동·출력 배율·미리보기 줌을 자동 배치 상태로 되돌린다."""
+        if not self.current_spec:
+            return
+        self.current_spec.pop("offsets", None)
+        self.current_spec.pop("size_scale", None)
+        self._view_zoom = 1.0
+        self._pan = [0, 0]
+        self._rerender_local("배치·배율 초기화")
 
     def open_browser(self):
         if not self.current_svg:
@@ -579,7 +830,8 @@ class App(tk.Tk):
             self._log(f"📤 SVG 저장됨: {path}", "sys"); self._open_file(path)
         else:
             if not svg_export.png_available():
-                self._log("⚠️ PNG 저장에는 cairosvg가 필요합니다: pip install cairosvg", "warn"); return
+                self._log("⚠️ PNG 저장에는 resvg-py가 필요합니다: pip install resvg-py "
+                          "(배포판 실행파일에는 내장)", "warn"); return
             path = self._ask_save(title="PNG 저장", initialdir=OUT_DIR,
                                   initialfile=f"{ts}_{dtype}.png", defaultextension=".png",
                                   filetypes=[("PNG 이미지", "*.png")])

@@ -4,8 +4,9 @@ openai>=1.30
 pypdf>=4.0
 python-docx>=1.1
 
+resvg-py>=0.3      # SVG→PNG 변환·미리보기 (러스트 resvg 내장 wheel — 시스템 라이브러리 불필요)
+
 # 선택 (있으면 기능 확장)
-cairosvg>=2.7      # SVG→PNG 변환·미리보기 (없어도 SVG 저장·브라우저 보기 가능)
 pymupdf>=1.24      # 스캔 PDF·이미지 OCR (없으면 텍스트 PDF만)
 
 # tkinter는 파이썬 표준 라이브러리(별도 설치 불필요, macOS/Windows 기본 포함)
