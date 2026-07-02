@@ -59,7 +59,7 @@ else:
     MONO = "DejaVu Sans Mono"
 
 NVIDIA_URL = "https://build.nvidia.com"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 
 DTYPE_LABELS = {
     "framework": "분석틀", "tree": "계층·분류", "flowchart": "흐름·절차",
@@ -351,19 +351,37 @@ class App(tk.Tk):
             self.build_onboarding()
 
     # ════════ 입력 placeholder ════════
+    # 주의: 한글 IME는 글자 조합 중 순간적으로 FocusOut/FocusIn을 발생시킬 수 있다.
+    # 그래서 (1) 사용자 글자는 어떤 경로로도 지우지 않고(안내문구와 정확히 같을 때만 삭제),
+    # (2) 안내문구 복원은 지연 후 포커스가 정말 떠났는지 확인하고 수행한다.
     PLACEHOLDER = "그리고 싶은 연구 내용·구조를 적어 주세요."
 
     def _set_ph(self):
+        if self.inp.get("1.0", "end").strip():      # 내용(조합 중 글자 포함)이 있으면 덮지 않음
+            return
         self.inp.delete("1.0", "end"); self.inp.insert("1.0", self.PLACEHOLDER)
         self.inp.configure(fg=C_DIM); self._ph_active = True
 
     def _clear_ph(self, e=None):
-        if getattr(self, "_ph_active", False):
-            self.inp.delete("1.0", "end"); self.inp.configure(fg=C_TEXT); self._ph_active = False
+        if not getattr(self, "_ph_active", False):
+            return
+        # 안내문구가 그대로 있을 때만 지운다 — 사용자 글자는 절대 지우지 않는다
+        if self.inp.get("1.0", "end-1c") == self.PLACEHOLDER:
+            self.inp.delete("1.0", "end")
+        self.inp.configure(fg=C_TEXT); self._ph_active = False
 
     def _restore_ph(self, e=None):
-        if not self.inp.get("1.0", "end").strip():
-            self._set_ph()
+        self.after(150, self._restore_ph_check)
+
+    def _restore_ph_check(self):
+        try:
+            focus = self.focus_get()
+        except Exception:
+            focus = None
+        # 포커스가 아직 입력칸이거나 판정 불가(IME 순간 이탈)면 건드리지 않는다
+        if focus is self.inp or focus is None:
+            return
+        self._set_ph()
 
     # ════════ 전송 ════════
     def on_return(self, event):
@@ -376,11 +394,12 @@ class App(tk.Tk):
             self.send()
 
     def send(self):
-        if getattr(self, "_ph_active", False) or self.busy:
+        if self.busy:
             return
-        text = self.inp.get("1.0", "end").strip()
-        if not text:
+        raw = self.inp.get("1.0", "end").strip()
+        if not raw or raw == self.PLACEHOLDER:      # 안내문구는 전송하지 않음
             return
+        text = raw
         self.inp.delete("1.0", "end")
         # 이미 그림이 있으면 '수정 지시'로 간주(부분 재렌더)
         if self.current_spec is not None and self._looks_like_edit(text):
@@ -761,9 +780,24 @@ class App(tk.Tk):
             name = "부제" if field == "sub" else "라벨"
             self._rerender_local(f"{name} 수정: {val or '(삭제)'}")
 
+        def on_focus_out(ev):
+            # 한글 IME가 조합 중 포커스를 순간적으로 뺏을 수 있으므로,
+            # 잠시 뒤 포커스가 정말 떠났는지 확인한 뒤에만 (취소가 아니라) 저장하고 닫는다
+            def check():
+                if done_flag["done"]:
+                    return
+                try:
+                    focus = self.focus_get()
+                except Exception:
+                    focus = None
+                if focus is entry or focus is None:
+                    return
+                done(True)
+            self.after(150, check)
+
         entry.bind("<Return>", lambda ev: done(True))
         entry.bind("<Escape>", lambda ev: done(False))
-        entry.bind("<FocusOut>", lambda ev: done(False))
+        entry.bind("<FocusOut>", on_focus_out)
 
     def _on_pv_hover(self, e):
         if not self.current_svg or self._drag:
