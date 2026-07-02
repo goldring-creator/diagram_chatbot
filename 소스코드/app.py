@@ -59,7 +59,7 @@ else:
     MONO = "DejaVu Sans Mono"
 
 NVIDIA_URL = "https://build.nvidia.com"
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.3.0"
 
 DTYPE_LABELS = {
     "framework": "분석틀", "tree": "계층·분류", "flowchart": "흐름·절차",
@@ -79,7 +79,8 @@ USAGE_TIPS = [
     "문서(PDF·docx·txt)를 📎로 첨부하거나, 아래에 연구 내용을 직접 써서 보내세요.",
     "예) \"교사 스트레스가 소진을 거쳐 교직 후회에 이르는 경로모형 그려줘\"",
     "그림이 나오면 미리보기에서 박스 더블클릭=글자 수정 · 드래그=위치 이동 · Ctrl+휠=확대,",
-    "우하단 ◢ 드래그=출력 크기. 말로도 수정됩니다: \"3번 박스 이름 바꿔\"",
+    "화살표 더블클릭=계수·점선/삭제 · Shift+박스 드래그=새 화살표 · 우하단 ◢=출력 크기.",
+    "말로도 수정됩니다: \"3번 박스 이름 바꿔\"",
 ]
 
 
@@ -125,6 +126,7 @@ class App(tk.Tk):
         self.current_spec = None       # 마지막 도식 스펙(dict)
         self.current_svg = None        # 마지막 SVG 텍스트
         self.current_hits = []         # 노드 위치 지도(viewBox 좌표) — 클릭·드래그용
+        self.current_edge_hits = []    # 화살표 선분 지도 — 클릭 편집용
         self.last_document = None      # 마지막으로 그린 원본 문서(재요청용)
         self._preview_img = None       # PhotoImage 참조 유지
         self._view_zoom = 1.0          # 미리보기 확대 배율(Ctrl+휠)
@@ -310,6 +312,7 @@ class App(tk.Tk):
         self.preview.bind("<Configure>", lambda e: self._redraw_preview())
         self.preview.bind("<Control-MouseWheel>", self._on_pv_wheel)
         self.preview.bind("<ButtonPress-1>", self._on_pv_press)
+        self.preview.bind("<Shift-ButtonPress-1>", self._on_pv_connect_press)
         self.preview.bind("<B1-Motion>", self._on_pv_motion)
         self.preview.bind("<ButtonRelease-1>", self._on_pv_release)
         self.preview.bind("<Double-Button-1>", lambda e: self._on_pv_double(e, "label"))
@@ -421,7 +424,7 @@ class App(tk.Tk):
         if self.busy:
             return
         self.current_spec = None; self.current_svg = None; self.last_document = None
-        self.current_hits = []
+        self.current_hits = []; self.current_edge_hits = []
         self._preview_img = None
         self._view_zoom = 1.0; self._pan = [0, 0]
         self._redraw_preview()
@@ -555,9 +558,10 @@ class App(tk.Tk):
 
         self.current_spec = spec
         self.last_document = self._pending_document
-        svg, warns, hits = renderer.render(spec)
+        svg, warns, hits, ehits = renderer.render(spec)
         self.current_svg = svg
         self.current_hits = hits
+        self.current_edge_hits = ehits
         self._view_zoom = 1.0
         self._pan = [0, 0]
 
@@ -570,8 +574,8 @@ class App(tk.Tk):
             self._log(f"⚠️ 한자/가나 의심 {len(cjk)}건 — {cjk[0]}", "warn")
         for w in warns:
             self._log("⚠️ " + w, "warn")
-        self._log("미리보기: 더블클릭=글자 수정 · 드래그=이동 · Ctrl+휠=확대 · 우하단 ◢=출력 크기. "
-                  "\"○○ 바꿔\"처럼 말로도 수정됩니다.", "sys")
+        self._log("미리보기: 더블클릭=글자 수정(화살표도) · 드래그=이동 · Shift+드래그=화살표 추가 · "
+                  "Ctrl+휠=확대 · ◢=출력 크기. \"○○ 바꿔\"처럼 말로도 수정됩니다.", "sys")
         self._render_preview_from_svg(svg)
         self._notify("도식 완성", "도식 생성이 완료되었습니다.")
 
@@ -651,6 +655,32 @@ class App(tk.Tk):
                 return h
         return None
 
+    @staticmethod
+    def _seg_dist(px, py, x1, y1, x2, y2):
+        """점 (px,py)와 선분 (x1,y1)-(x2,y2) 사이 거리."""
+        dx, dy = x2 - x1, y2 - y1
+        L2 = dx * dx + dy * dy
+        if L2 < 1e-9:
+            return ((px - x1) ** 2 + (py - y1) ** 2) ** 0.5
+        t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / L2))
+        qx, qy = x1 + t * dx, y1 + t * dy
+        return ((px - qx) ** 2 + (py - qy) ** 2) ** 0.5
+
+    def _edge_at(self, cx, cy):
+        """캔버스 좌표에서 가장 가까운 화살표(허용오차 내)를 찾는다."""
+        if not self.current_edge_hits:
+            return None
+        x, y = self._to_svg_xy(cx, cy)
+        tol = max(7.0, 7.0 / max(self._px_per_unit, 0.1))
+        best, best_d = None, tol
+        for h in self.current_edge_hits:
+            if h.get("ei", -1) < 0:
+                continue
+            d = self._seg_dist(x, y, h["x1"], h["y1"], h["x2"], h["y2"])
+            if d < best_d:
+                best_d, best = d, h
+        return best
+
     def _on_size_handle(self, cx, cy):
         if not self._preview_img:
             return False
@@ -675,7 +705,7 @@ class App(tk.Tk):
                           "scale0": renderer.effective_size_scale(self.current_spec or {})}
             return
         hit = self._hit_at(e.x, e.y)
-        if hit:
+        if hit and not str(hit["id"]).startswith("__"):   # 제목·각주는 드래그 아닌 더블클릭 수정
             gx1, gy1, gx2, gy2 = self._node_canvas_bbox(hit)
             ghost = c.create_rectangle(gx1, gy1, gx2, gy2, dash=(4, 3),
                                        outline="#1f6feb", width=2, tags="ghost")
@@ -683,6 +713,21 @@ class App(tk.Tk):
         else:
             self._drag = {"mode": "pan", "x0": e.x, "y0": e.y,
                           "pan0": (self._pan[0], self._pan[1])}
+
+    def _on_pv_connect_press(self, e):
+        """Shift+노드 드래그 = 새 화살표 추가 시작."""
+        if not self.current_svg or self.busy:
+            return
+        hit = self._hit_at(e.x, e.y)
+        if not hit or str(hit["id"]).startswith("__"):
+            return "break"
+        gx1, gy1, gx2, gy2 = self._node_canvas_bbox(hit)
+        cx0, cy0 = (gx1 + gx2) / 2, (gy1 + gy2) / 2
+        line = self.preview.create_line(cx0, cy0, e.x, e.y, dash=(4, 3),
+                                        fill="#1f6feb", width=2, arrow="last", tags="cghost")
+        self._drag = {"mode": "connect", "from": hit, "line": line,
+                      "cx0": cx0, "cy0": cy0}
+        return "break"
 
     def _on_pv_motion(self, e):
         d = self._drag
@@ -693,6 +738,8 @@ class App(tk.Tk):
             gx1, gy1, gx2, gy2 = self._node_canvas_bbox(d["hit"])
             dx, dy = e.x - d["x0"], e.y - d["y0"]
             c.coords(d["ghost"], gx1 + dx, gy1 + dy, gx2 + dx, gy2 + dy)
+        elif d["mode"] == "connect":
+            c.coords(d["line"], d["cx0"], d["cy0"], e.x, e.y)
         elif d["mode"] == "pan":
             dx, dy = e.x - d["x0"], e.y - d["y0"]
             self._pan[0] = d["pan0"][0] + dx
@@ -735,50 +782,111 @@ class App(tk.Tk):
             if "new_scale" in d:
                 self.current_spec["size_scale"] = round(d["new_scale"], 2)
                 self._rerender_local(f"출력 크기 배율 {d['new_scale']:.2f}× — SVG·PNG 저장 크기에 반영")
+        elif d["mode"] == "connect":
+            c.delete("cghost")
+            target = self._hit_at(e.x, e.y)
+            src_id = d["from"]["id"]
+            if (not target or str(target["id"]).startswith("__")
+                    or target["id"] == src_id):
+                return                                  # 빈 곳·자기 자신이면 취소
+            spec = self.current_spec
+            dup = next((ed for ed in spec.get("edges", [])
+                        if ed.get("from") == src_id and ed.get("to") == target["id"]), None)
+            if dup is None:
+                spec.setdefault("edges", []).append(
+                    {"from": src_id, "to": target["id"], "style": "solid"})
+                self._rerender_local(f"화살표 추가: {src_id} → {target['id']}")
+            new_ei = spec["edges"].index(dup if dup is not None else spec["edges"][-1])
+            ehit = next((h for h in self.current_edge_hits if h.get("ei") == new_ei), None)
+            if ehit:                                    # 바로 라벨·선 종류 정하게 수정창 열기
+                self._begin_edge_edit(ehit)
 
     def _on_pv_double(self, e, field):
         if not self.current_svg or self.busy:
             return
         if self._drag:                                # press로 시작된 드래그 취소
-            self.preview.delete("ghost")
+            self.preview.delete("ghost"); self.preview.delete("cghost")
             self._drag = None
         hit = self._hit_at(e.x, e.y)
         if hit:
             self._begin_pv_edit(hit, field)
+            return
+        ehit = self._edge_at(e.x, e.y)
+        if ehit:
+            self._begin_edge_edit(ehit)
 
     def _begin_pv_edit(self, hit, field):
-        node = next((n for n in (self.current_spec or {}).get("nodes", [])
-                     if n.get("id") == hit["id"]), None)
-        if node is None:
-            return
+        spec = self.current_spec or {}
+        nid = hit["id"]
+        # 제목·각주는 스펙 최상위 필드를 직접 수정
+        special_key = {"__title__": "title", "__caption__": "caption"}.get(nid)
+        node = None
+        if special_key is None:
+            node = next((n for n in spec.get("nodes", []) if n.get("id") == nid), None)
+            if node is None:
+                return
+            cur_val = node.get(field) or ""
+            what = "부제" if field == "sub" else "라벨"
+        else:
+            cur_val = spec.get(special_key) or ""
+            what = "제목" if special_key == "title" else "각주"
         c = self.preview
         gx1, gy1, gx2, gy2 = self._node_canvas_bbox(hit)
-        entry = tk.Entry(c, font=(MONO, 11), justify="center", bg="#ffffff",
-                         fg="#1A1A1A", insertbackground="#1A1A1A", relief="solid", bd=1)
-        entry.insert(0, node.get(field) or "")
-        win = c.create_window((gx1 + gx2) / 2, (gy1 + gy2) / 2, window=entry,
-                              width=max(130, gx2 - gx1 + 16))
+        wrap = tk.Frame(c, bg="#ffffff", relief="solid", bd=1)
+        entry = tk.Entry(wrap, font=(MONO, 11), justify="center", bg="#ffffff",
+                         fg="#1A1A1A", insertbackground="#1A1A1A", relief="flat", bd=0)
+        entry.insert(0, cur_val)
+        entry.pack(side="left", fill="both", expand=True, ipady=3, padx=(4, 0))
+        del_btn = tk.Label(wrap, text="🗑", bg="#ffffff", fg=C_RED, cursor="hand2",
+                           font=(MONO, 11), padx=6)
+        del_btn.pack(side="right", fill="y")
+        _Tooltip(del_btn, f"{what} 완전 삭제" + ("" if special_key else " (연결 화살표도 함께)"))
+        win = c.create_window((gx1 + gx2) / 2, (gy1 + gy2) / 2, window=wrap,
+                              width=max(170, gx2 - gx1 + 46))
         entry.focus_set(); entry.select_range(0, "end")
         self._enable_clipboard(entry)
         done_flag = {"done": False}
 
+        def close():
+            done_flag["done"] = True
+            c.delete(win); wrap.destroy()
+
         def done(save):
             if done_flag["done"]:
                 return
-            done_flag["done"] = True
             val = entry.get().strip()
-            c.delete(win); entry.destroy()
+            close()
             if not save:
                 return
             cjk = core.check_cjk(val)
             if cjk:
                 self._log(f"⚠️ 입력에 한자/가나가 있습니다: {cjk[0]}", "warn")
-            if field == "sub" and not val:
+            if special_key:
+                if val:
+                    spec[special_key] = val
+                else:
+                    spec.pop(special_key, None)
+            elif field == "sub" and not val:
                 node.pop("sub", None)
             else:
                 node[field] = val
-            name = "부제" if field == "sub" else "라벨"
-            self._rerender_local(f"{name} 수정: {val or '(삭제)'}")
+            self._rerender_local(f"{what} 수정: {val or '(삭제)'}")
+
+        def delete_it(_e=None):
+            if done_flag["done"]:
+                return
+            close()
+            if special_key:
+                spec.pop(special_key, None)
+                self._rerender_local(f"{what} 삭제됨")
+            else:
+                spec["nodes"] = [n for n in spec.get("nodes", []) if n.get("id") != nid]
+                spec["edges"] = [e for e in spec.get("edges", [])
+                                 if e.get("from") != nid and e.get("to") != nid]
+                (spec.get("offsets") or {}).pop(nid, None)
+                self._rerender_local(f"노드 삭제: {node.get('label', nid)} (연결 화살표 포함)")
+
+        del_btn.bind("<Button-1>", delete_it)
 
         def on_focus_out(ev):
             # 한글 IME가 조합 중 포커스를 순간적으로 뺏을 수 있으므로,
@@ -799,6 +907,98 @@ class App(tk.Tk):
         entry.bind("<Escape>", lambda ev: done(False))
         entry.bind("<FocusOut>", on_focus_out)
 
+    # ── 화살표(엣지) 편집: 라벨(계수)·실선/점선 전환·삭제 ──
+    EDGE_STYLES = ["solid", "dashed", "measure"]
+    EDGE_STYLE_LABEL = {"solid": "─ 실선", "dashed": "┄ 점선", "measure": "· 측정"}
+
+    def _begin_edge_edit(self, ehit):
+        spec = self.current_spec or {}
+        edges = spec.get("edges", [])
+        ei = ehit.get("ei", -1)
+        if not (0 <= ei < len(edges)):
+            return
+        edge = edges[ei]
+        c = self.preview
+        ox, oy = self._img_origin
+        s = self._px_per_unit
+        ex = ox + (ehit["x1"] + ehit["x2"]) / 2 * s
+        ey = oy + (ehit["y1"] + ehit["y2"]) / 2 * s
+        wrap = tk.Frame(c, bg="#ffffff", relief="solid", bd=1)
+        entry = tk.Entry(wrap, font=(MONO, 11), justify="center", bg="#ffffff",
+                         fg="#1A1A1A", insertbackground="#1A1A1A", relief="flat", bd=0, width=12)
+        entry.insert(0, edge.get("label") or "")
+        entry.pack(side="left", fill="both", expand=True, ipady=3, padx=(4, 0))
+        style_state = {"v": edge.get("style", "solid")}
+        if style_state["v"] not in self.EDGE_STYLES:
+            style_state["v"] = "solid"
+        sty_btn = tk.Label(wrap, text=self.EDGE_STYLE_LABEL[style_state["v"]], bg="#eef2f6",
+                           fg="#1A1A1A", cursor="hand2", font=(MONO, 10), padx=6)
+        sty_btn.pack(side="left", fill="y", padx=(4, 0))
+        _Tooltip(sty_btn, "클릭할 때마다 실선 → 점선 → 측정(가는 선) 전환")
+        del_btn = tk.Label(wrap, text="🗑", bg="#ffffff", fg=C_RED, cursor="hand2",
+                           font=(MONO, 11), padx=6)
+        del_btn.pack(side="right", fill="y")
+        _Tooltip(del_btn, "이 화살표 삭제")
+        win = c.create_window(ex, ey, window=wrap, width=250)
+        entry.focus_set(); entry.select_range(0, "end")
+        self._enable_clipboard(entry)
+        done_flag = {"done": False}
+
+        def close():
+            done_flag["done"] = True
+            c.delete(win); wrap.destroy()
+
+        def cycle_style(_e=None):
+            i = self.EDGE_STYLES.index(style_state["v"])
+            style_state["v"] = self.EDGE_STYLES[(i + 1) % len(self.EDGE_STYLES)]
+            sty_btn.configure(text=self.EDGE_STYLE_LABEL[style_state["v"]])
+
+        def done(save):
+            if done_flag["done"]:
+                return
+            val = entry.get().strip()
+            close()
+            if not save:
+                return
+            if val:
+                edge["label"] = val
+            else:
+                edge.pop("label", None)
+            edge["style"] = style_state["v"]
+            self._rerender_local(
+                f"화살표 수정: {edge.get('from')}→{edge.get('to')} "
+                f"({self.EDGE_STYLE_LABEL[style_state['v']].split()[-1]}"
+                + (f", '{val}'" if val else "") + ")")
+
+        def delete_it(_e=None):
+            if done_flag["done"]:
+                return
+            close()
+            try:
+                spec["edges"].remove(edge)
+            except ValueError:
+                pass
+            self._rerender_local(f"화살표 삭제: {edge.get('from')} → {edge.get('to')}")
+
+        def on_focus_out(ev):
+            def check():
+                if done_flag["done"]:
+                    return
+                try:
+                    focus = self.focus_get()
+                except Exception:
+                    focus = None
+                if focus is entry or focus is None:
+                    return
+                done(True)
+            self.after(150, check)
+
+        sty_btn.bind("<Button-1>", cycle_style)
+        del_btn.bind("<Button-1>", delete_it)
+        entry.bind("<Return>", lambda ev: done(True))
+        entry.bind("<Escape>", lambda ev: done(False))
+        entry.bind("<FocusOut>", on_focus_out)
+
     def _on_pv_hover(self, e):
         if not self.current_svg or self._drag:
             return
@@ -811,7 +1011,7 @@ class App(tk.Tk):
         if hit is None:
             if self._hover_id is not None:
                 c.delete("hover"); self._hover_id = None
-            c.configure(cursor="")
+            c.configure(cursor="hand2" if self._edge_at(e.x, e.y) else "")
             return
         c.configure(cursor="hand2")
         if hit["id"] != self._hover_id:
@@ -824,9 +1024,10 @@ class App(tk.Tk):
         """AI 호출 없이 현재 스펙만 즉시 재렌더 (라벨 수정·드래그·배율)."""
         if not self.current_spec:
             return
-        svg, warns, hits = renderer.render(self.current_spec)
+        svg, warns, hits, ehits = renderer.render(self.current_spec)
         self.current_svg = svg
         self.current_hits = hits
+        self.current_edge_hits = ehits
         for w in warns:
             self._log("⚠️ " + w, "warn")
         if msg:

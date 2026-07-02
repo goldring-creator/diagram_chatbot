@@ -150,11 +150,30 @@ def draw_box(cx, cy, w, h, label, sub, role) -> str:
     return "\n".join(out) + "\n"
 
 
+def draw_ellipse(cx, cy, rx, ry, label, sub, role="normal") -> str:
+    """SEM 잠재변수용 타원 (흰 배경 + 진한 테두리, 강조 시 어두운 채움)."""
+    if role == "emphasis":
+        fill, txt, sub_txt = PALETTE["emph_fill"], PALETTE["emph_text"], PALETTE["emph_text"]
+    else:
+        fill, txt, sub_txt = PALETTE["bg"], PALETTE["norm_text"], PALETTE["dim"]
+    out = [f'  <ellipse cx="{cx:.1f}" cy="{cy:.1f}" rx="{rx:.1f}" ry="{ry:.1f}" '
+           f'fill="{fill}" stroke="{PALETTE["border"]}" stroke-width="1.6"/>']
+    base = cy + FS_LABEL * 0.36 - (7 if sub else 0)
+    out.append(f'  <text x="{cx:.1f}" y="{base:.1f}" text-anchor="middle" '
+               f'font-size="{FS_LABEL}" font-weight="bold" fill="{txt}">{esc(label)}</text>')
+    if sub:
+        out.append(f'  <text x="{cx:.1f}" y="{base + FS_SUB * 1.35:.1f}" text-anchor="middle" '
+                   f'font-size="{FS_SUB}" fill="{sub_txt}">{esc(sub)}</text>')
+    return "\n".join(out) + "\n"
+
+
 def _edge_line(x1, y1, x2, y2, style, label=None) -> str:
-    dash = ' stroke-dasharray="5,4"' if style == "dashed" else ""
-    mk = "url(#awd)" if style == "dashed" else "url(#aw)"
-    sw = 1.2 if style == "dashed" else 1.7
-    col = PALETTE["border_lt"] if style == "dashed" else PALETTE["arrow"]
+    if style == "measure":                     # 잠재변수→관측지표 (가는 실선)
+        dash, mk, sw, col = "", "url(#awd)", 1.0, PALETTE["border_lt"]
+    elif style == "dashed":
+        dash, mk, sw, col = ' stroke-dasharray="5,4"', "url(#awd)", 1.2, PALETTE["border_lt"]
+    else:
+        dash, mk, sw, col = "", "url(#aw)", 1.7, PALETTE["arrow"]
     out = (f'  <line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
            f'stroke="{col}" stroke-width="{sw}"{dash} marker-end="{mk}"/>\n')
     if label:
@@ -179,6 +198,14 @@ def _roots(nodes, edges):
     return roots or list(nodes)[:1]
 
 
+def _edge_index(spec, e) -> int:
+    """spec["edges"] 원본 리스트에서의 인덱스 (클릭 편집용 식별자)."""
+    try:
+        return spec.get("edges", []).index(e)
+    except ValueError:
+        return -1
+
+
 def _offset_of(spec, nid):
     """사용자가 드래그로 옮긴 노드의 이동량 (spec["offsets"] = {id: [dx, dy]})."""
     v = (spec.get("offsets") or {}).get(nid)
@@ -194,7 +221,7 @@ def _offset_of(spec, nid):
 def render_tree(spec) -> str:
     nodes, edges = _index(spec)
     if not nodes:
-        return _fallback(spec, "그릴 노드가 없습니다 — 내용을 더 구체적으로 적어 주세요."), []
+        return _fallback(spec, "그릴 노드가 없습니다 — 내용을 더 구체적으로 적어 주세요."), [], []
     children = {}
     for e in edges:
         children.setdefault(e["from"], []).append(e["to"])
@@ -249,11 +276,14 @@ def render_tree(spec) -> str:
         height = max(height, max(y for _, y, _ in pos.values()) + NODE_H / 2 + MARGIN + CAPTION_H)
 
     body = [_svg_open(width, height), _defs(), _title(width, spec.get("title"))]
+    ehits = []
     for e in edges:
         x1, y1, _ = pos[e["from"]]
         x2, y2, _ = pos[e["to"]]
         body.append(_edge_line(x1, y1 + NODE_H / 2, x2, y2 - NODE_H / 2 - 4,
                                e.get("style", "solid"), e.get("label")))
+        ehits.append({"ei": _edge_index(spec, e), "x1": x1, "y1": y1 + NODE_H / 2,
+                      "x2": x2, "y2": y2 - NODE_H / 2 - 4})
     hits = []
     for nid, n in nodes.items():
         cx, cy, d = pos[nid]
@@ -271,14 +301,14 @@ def render_tree(spec) -> str:
                 [k for k in kids if k in pos]):
             mid = sum(pos[k][0] for k in placed) / len(placed)
             assert abs(pos[pid][0] - mid) < 0.5, f"트리 대칭 위반: {pid}"
-    return "".join(body), hits
+    return "".join(body), hits, ehits
 
 
 # ══════════════════ B. 플로우차트 (주경로 체인 + 오른쪽 분기) ══════════════════
 def render_flowchart(spec) -> str:
     nodes, edges = _index(spec)
     if not nodes:
-        return _fallback(spec, "그릴 노드가 없습니다 — 내용을 더 구체적으로 적어 주세요."), []
+        return _fallback(spec, "그릴 노드가 없습니다 — 내용을 더 구체적으로 적어 주세요."), [], []
     order = [n["id"] for n in spec.get("nodes", []) if n.get("id") in nodes]
     outdeg = {}
     for e in edges:
@@ -348,6 +378,7 @@ def render_flowchart(spec) -> str:
     body = [_svg_open(width, height), _defs(), _title(width, spec.get("title"))]
     main_set = set(main)
     # 엣지
+    ehits = []
     for e in edges:
         a, b = e["from"], e["to"]
         xa, ya = pos[a]; xb, yb = pos[b]
@@ -355,6 +386,8 @@ def render_flowchart(spec) -> str:
         if primary and b in main_set and yb > ya:        # 척추 직선(아래로)
             body.append(_edge_line(xa, ya + half_h(a), xb, yb - half_h(b) - 4,
                                    e.get("style", "solid"), e.get("label")))
+            ehits.append({"ei": _edge_index(spec, e), "x1": xa, "y1": ya + half_h(a),
+                          "x2": xb, "y2": yb - half_h(b) - 4})
         else:                                            # 오른쪽으로 꺾는 분기/우회
             sx = xa + half_w(a)
             # route_x가 대상 왼쪽이면 대상 왼쪽 가장자리에, 오른쪽이면 오른쪽 가장자리에 화살표
@@ -362,6 +395,11 @@ def render_flowchart(spec) -> str:
             body.append(f'  <path d="M {sx:.1f} {ya:.1f} H {route_x:.1f} V {yb:.1f} '
                         f'H {tx:.1f}" fill="none" stroke="{PALETTE["arrow"]}" '
                         f'stroke-width="1.6" marker-end="url(#aw)"/>\n')
+            if abs(ya - yb) < 4:                         # 수평 분기 → 그 선분
+                ehits.append({"ei": _edge_index(spec, e), "x1": sx, "y1": ya, "x2": tx, "y2": yb})
+            else:                                        # ㄱ자 분기 → 세로 구간이 클릭 대상
+                ehits.append({"ei": _edge_index(spec, e), "x1": route_x, "y1": ya,
+                              "x2": route_x, "y2": yb})
             if e.get("label"):
                 ly = ya - 7 if abs(ya - yb) < 4 else (ya + yb) / 2
                 body.append(f'  <text x="{route_x+5:.1f}" y="{ly:.1f}" text-anchor="start" '
@@ -380,7 +418,7 @@ def render_flowchart(spec) -> str:
                      "w": half_w(nid) * 2, "h": half_h(nid) * 2})
     body.append(_caption(width, height, spec.get("caption")))
     body.append("</svg>\n")
-    return "".join(body), hits
+    return "".join(body), hits, ehits
 
 
 def _diamond(cx, cy, label) -> str:
@@ -424,7 +462,171 @@ def _layers(nodes, edges):
 
 
 def render_path_model(spec):
-    return _render_horizontal(spec, emphasize_last=True)
+    """경로모형. 관측지표(kind:"observed" 또는 style:"measure" 엣지)가 있으면
+    SEM 표기(잠재변수=타원, 지표=상단 작은 사각)로, 없으면 기존 수평 배치로 그린다."""
+    nodes, edges = _index(spec)
+    if not nodes:
+        return _fallback(spec, "그릴 노드가 없습니다 — 내용을 더 구체적으로 적어 주세요."), [], []
+    measure = [e for e in edges
+               if e.get("style") == "measure" or nodes[e["to"]].get("kind") == "observed"]
+    observed = ({e["to"] for e in measure}
+                | {nid for nid in nodes if nodes[nid].get("kind") == "observed"})
+    if not observed:
+        return _render_horizontal(spec, emphasize_last=True)
+    return _render_sem(spec, nodes, edges, observed, measure)
+
+
+IND_W, IND_H = 118, 44                 # SEM 관측지표 박스
+
+
+def _render_sem(spec, nodes, edges, observed, measure) -> tuple:
+    main = [nid for nid in nodes if nid not in observed]
+    if not main:
+        return _fallback(spec, "잠재/구조 변수가 없습니다 — 구조 경로를 적어 주세요."), [], []
+    struct = [e for e in edges
+              if e not in measure and e["from"] not in observed and e["to"] not in observed]
+    mnodes = {nid: nodes[nid] for nid in main}
+    layer, order = _layers(mnodes, struct)
+    maxlayer = max(layer.values()) if layer else 0
+    cols = {}
+    for nid in order:
+        cols.setdefault(layer[nid], []).append(nid)
+
+    def is_lat(nid):
+        return nodes[nid].get("kind") == "latent"
+
+    def half_w(nid):
+        if is_lat(nid):
+            return max(64.0, text_w(nodes[nid].get("label", ""), FS_LABEL) / 2 + 26)
+        return NODE_W / 2
+
+    def half_h(nid):
+        return 34.0 if is_lat(nid) else NODE_H / 2
+
+    # 각 잠재변수의 지표 묶음
+    ind_of = {}
+    for e in measure:
+        if e["from"] in mnodes and e["to"] in observed:
+            ind_of.setdefault(e["from"], []).append(e["to"])
+    band_h = (IND_H + 58) if ind_of else 0     # 지표 밴드 + 측정 화살표 공간
+
+    # 구조(주) 변수 배치 — 수평 레이어
+    ROW = 86
+    colw = NODE_W + 130
+    rows_max = max(len(v) for v in cols.values())
+    top_main = TITLE_H + MARGIN + band_h
+    col_h = rows_max * ROW
+    height = top_main + col_h + MARGIN + CAPTION_H
+    canvas_cy = top_main + col_h / 2
+    pos = {}
+    for L in range(maxlayer + 1):
+        ids = cols.get(L, [])
+        start_y = canvas_cy - len(ids) * ROW / 2
+        cx = MARGIN + 92 + L * colw
+        for i, nid in enumerate(ids):
+            pos[nid] = (cx, start_y + i * ROW + ROW / 2)
+    for nid in list(pos):                      # 드래그 오프셋
+        dx, dy = _offset_of(spec, nid)
+        if dx or dy:
+            x, y = pos[nid]
+            pos[nid] = (max(half_w(nid) + 8, x + dx), max(TITLE_H + half_h(nid) + 8, y + dy))
+
+    # 지표 배치 — 상단 밴드에 잠재변수 x 순서대로, 겹치지 않게
+    ind_y = TITLE_H + MARGIN + IND_H / 2
+    ind_pos = {}
+    cur_x = MARGIN + IND_W / 2
+    for lat in sorted(ind_of, key=lambda n: pos.get(n, (0, 0))[0]):
+        kids = ind_of[lat]
+        group_w = len(kids) * IND_W + (len(kids) - 1) * 12
+        gx = max(cur_x, pos[lat][0] - group_w / 2 + IND_W / 2)
+        for k in kids:
+            dx, dy = _offset_of(spec, k)
+            ind_pos[k] = (gx + dx, max(TITLE_H + IND_H / 2 + 6, ind_y + dy))
+            gx += IND_W + 12
+        cur_x = gx + 10
+    for k in observed:                          # 측정 엣지 없는 고아 지표도 배치
+        if k not in ind_pos:
+            ind_pos[k] = (cur_x, ind_y)
+            cur_x += IND_W + 12
+
+    width = max([pos[n][0] + half_w(n) for n in pos]
+                + [p[0] + IND_W / 2 for p in ind_pos.values()] + [640]) + MARGIN
+    height = max(height, max([pos[n][1] + half_h(n) for n in pos]
+                             + [p[1] + IND_H / 2 for p in ind_pos.values()])
+                 + MARGIN + CAPTION_H)
+    for e in struct:                            # 아래로 우회하는 점선 곡선 공간 확보
+        if e.get("style") == "dashed" and e["from"] in pos and e["to"] in pos:
+            x1, y1 = pos[e["from"]]; x2, y2 = pos[e["to"]]
+            if abs(x1 - x2) > colw + 10:
+                low = max(y1 + half_h(e["from"]), y2 + half_h(e["to"])) + 50
+                height = max(height, low + MARGIN + CAPTION_H)
+
+    body = [_svg_open(width, height), _defs(), _title(width, spec.get("title"))]
+    ehits = []
+    # 측정 화살표 (잠재 위쪽 → 지표 아래쪽)
+    for e in measure:
+        if e["from"] in pos and e["to"] in ind_pos:
+            x1, y1 = pos[e["from"]]
+            x2, y2 = ind_pos[e["to"]]
+            seg = (x1, y1 - half_h(e["from"]), x2, y2 + IND_H / 2 + 4)
+            body.append(_edge_line(*seg, "measure", e.get("label")))
+            ehits.append({"ei": _edge_index(spec, e),
+                          "x1": seg[0], "y1": seg[1], "x2": seg[2], "y2": seg[3]})
+    # 구조 경로 (좌→우, 계수 라벨은 흰 바탕 위에)
+    # 점선(직접효과)이 다른 변수를 관통하지 않도록 아래로 우회하는 곡선으로 그린다
+    for e in struct:
+        a, b = e["from"], e["to"]
+        x1, y1 = pos[a]; x2, y2 = pos[b]
+        style = e.get("style", "solid")
+        if style == "dashed" and abs(x1 - x2) > colw + 10:     # 한 열 이상 건너뛰는 직접효과
+            sx, sy = x1 + half_w(a) * 0.5, y1 + half_h(a)
+            tx, ty = x2 - half_w(b) * 0.5, y2 + half_h(b) + 5
+            mx, my = (sx + tx) / 2, max(sy, ty) + 74
+            body.append(f'  <path d="M {sx:.1f} {sy:.1f} Q {mx:.1f} {my:.1f} {tx:.1f} {ty:.1f}" '
+                        f'fill="none" stroke="{PALETTE["border_lt"]}" stroke-width="1.2" '
+                        f'stroke-dasharray="5,4" marker-end="url(#awd)"/>\n')
+            # 곡선의 클릭 판정은 정점 부근 수평 근사 선분으로
+            qy = 0.25 * sy + 0.5 * my + 0.25 * ty
+            ehits.append({"ei": _edge_index(spec, e), "x1": sx, "y1": qy, "x2": tx, "y2": qy})
+            if e.get("label"):
+                lx, ly = mx, (max(sy, ty) + my) / 2 + 4        # 곡선 정점 부근
+                lw = text_w(e["label"], FS_EDGE)
+                body.append(f'  <rect x="{lx-lw/2-3:.1f}" y="{ly-11:.1f}" width="{lw+6:.1f}" '
+                            f'height="15" fill="{PALETTE["bg"]}"/>\n')
+                body.append(f'  <text x="{lx:.1f}" y="{ly:.1f}" text-anchor="middle" '
+                            f'font-size="{FS_EDGE}" fill="{PALETTE["dim"]}">{esc(e["label"])}</text>\n')
+        elif abs(x1 - x2) > 4:
+            sx = x1 + half_w(a) if x2 > x1 else x1 - half_w(a)
+            tx = x2 - half_w(b) - 4 if x2 > x1 else x2 + half_w(b) + 4
+            body.append(_edge_line(sx, y1, tx, y2, style, e.get("label")))
+            ehits.append({"ei": _edge_index(spec, e), "x1": sx, "y1": y1, "x2": tx, "y2": y2})
+        else:
+            seg = (x1, y1 + half_h(a), x2, y2 - half_h(b) - 4)
+            body.append(_edge_line(*seg, style, e.get("label")))
+            ehits.append({"ei": _edge_index(spec, e),
+                          "x1": seg[0], "y1": seg[1], "x2": seg[2], "y2": seg[3]})
+    # 노드
+    hits = []
+    for nid in pos:
+        n = nodes[nid]
+        x, y = pos[nid]
+        if is_lat(nid):
+            rx, ry = half_w(nid), half_h(nid)
+            body.append(draw_ellipse(x, y, rx, ry, n.get("label", nid), n.get("sub"),
+                                     n.get("role") or "normal"))
+            hits.append({"id": nid, "x": x - rx, "y": y - ry, "w": rx * 2, "h": ry * 2})
+        else:
+            role = n.get("role") or "normal"
+            body.append(draw_box(x, y, NODE_W, NODE_H, n.get("label", nid), n.get("sub"), role))
+            hits.append({"id": nid, "x": x - NODE_W / 2, "y": y - NODE_H / 2,
+                         "w": NODE_W, "h": NODE_H})
+    for nid, (x, y) in ind_pos.items():
+        n = nodes[nid]
+        body.append(draw_box(x, y, IND_W, IND_H, n.get("label", nid), n.get("sub"), "normal"))
+        hits.append({"id": nid, "x": x - IND_W / 2, "y": y - IND_H / 2, "w": IND_W, "h": IND_H})
+    body.append(_caption(width, height, spec.get("caption")))
+    body.append("</svg>\n")
+    return "".join(body), hits, ehits
 
 
 def render_framework(spec):
@@ -434,7 +636,7 @@ def render_framework(spec):
 def _render_horizontal(spec, emphasize_last) -> str:
     nodes, edges = _index(spec)
     if not nodes:
-        return _fallback(spec, "그릴 노드가 없습니다 — 내용을 더 구체적으로 적어 주세요."), []
+        return _fallback(spec, "그릴 노드가 없습니다 — 내용을 더 구체적으로 적어 주세요."), [], []
     layer, order = _layers(nodes, edges)
     maxlayer = max(layer.values()) if layer else 0
     cols = {}
@@ -483,15 +685,17 @@ def _render_horizontal(spec, emphasize_last) -> str:
         height = max(height, max(pos[n][1] + NODE_H / 2 for n in pos) + MARGIN + CAPTION_H)
 
     body = [_svg_open(width, height), _defs(), _title(width, spec.get("title"))]
+    ehits = []
     for e in edges:
         a, b = e["from"], e["to"]
         x1, y1 = pos[a]; x2, y2 = pos[b]
         if abs(layer[a] - layer[b]) >= 1:                 # 좌→우 가장자리 연결
-            body.append(_edge_line(x1 + w_of[a] / 2, y1, x2 - w_of[b] / 2 - 4, y2,
-                                   e.get("style", "solid"), e.get("label")))
+            seg = (x1 + w_of[a] / 2, y1, x2 - w_of[b] / 2 - 4, y2)
         else:                                             # 같은 레이어(수직 연결)
-            body.append(_edge_line(x1, y1 + NODE_H / 2, x2, y2 - NODE_H / 2 - 4,
-                                   e.get("style", "solid"), e.get("label")))
+            seg = (x1, y1 + NODE_H / 2, x2, y2 - NODE_H / 2 - 4)
+        body.append(_edge_line(*seg, e.get("style", "solid"), e.get("label")))
+        ehits.append({"ei": _edge_index(spec, e),
+                      "x1": seg[0], "y1": seg[1], "x2": seg[2], "y2": seg[3]})
     hits = []
     for nid, n in nodes.items():
         cx, cy = pos[nid]
@@ -500,7 +704,7 @@ def _render_horizontal(spec, emphasize_last) -> str:
                      "w": w_of[nid], "h": NODE_H})
     body.append(_caption(width, height, spec.get("caption")))
     body.append("</svg>\n")
-    return "".join(body), hits
+    return "".join(body), hits, ehits
 
 
 # ══════════════════ C. 레이더 (극좌표 등각) ══════════════════
@@ -509,7 +713,7 @@ def render_radar(spec) -> str:
     series = spec.get("series", [])
     n = len(axes)
     if n < 3:
-        return _fallback(spec, "레이더는 축(axes)이 3개 이상 필요합니다."), []
+        return _fallback(spec, "레이더는 축(axes)이 3개 이상 필요합니다."), [], []
     width, height = 720, 620
     cx, cy = width / 2, TITLE_H + (height - TITLE_H - CAPTION_H) / 2 + 6
     R = min(width, height - TITLE_H - CAPTION_H) / 2 - 90
@@ -560,7 +764,7 @@ def render_radar(spec) -> str:
         ly += 20
     body.append(_caption(width, height, spec.get("caption")))
     body.append("</svg>\n")
-    return "".join(body), []
+    return "".join(body), [], []
 
 
 # ══════════════════ D. 타임라인 (다중 레인) ══════════════════
@@ -570,7 +774,7 @@ def render_timeline(spec) -> str:
     events = tl.get("events", [])
     start, end = tl.get("start"), tl.get("end")
     if not lanes or start is None or end is None or end <= start:
-        return _fallback(spec, "타임라인은 start·end·lanes가 필요합니다."), []
+        return _fallback(spec, "타임라인은 start·end·lanes가 필요합니다."), [], []
     width = 960
     lane_h = 96
     left = 150                     # 레인 이름 영역
@@ -630,7 +834,7 @@ def render_timeline(spec) -> str:
                         f'font-size="{FS_SUB}" fill="{PALETTE["norm_text"]}">{esc(ev.get("label",""))}</text>\n')
     body.append(_caption(width, height, spec.get("caption")))
     body.append("</svg>\n")
-    return "".join(body), []
+    return "".join(body), [], []
 
 
 # ══════════════════ 폴백(유형 미상·필드 부족) ══════════════════
@@ -686,25 +890,38 @@ def _apply_size_scale(svg: str, spec: dict) -> str:
 
 
 def render(spec: dict):
-    """도식 스펙 → (svg_text, warnings, hits).
-    hits는 미리보기 인터랙션용 노드 위치 지도(viewBox 좌표):
-    [{"id", "x", "y", "w", "h"}]. 필수필드 부족·유형미상은 폴백으로 처리."""
+    """도식 스펙 → (svg_text, warnings, hits, edge_hits).
+    hits: 노드·제목·각주 클릭 영역 [{"id","x","y","w","h"}] (viewBox 좌표).
+    edge_hits: 화살표 클릭 판정용 선분 [{"ei","x1","y1","x2","y2"}] —
+    ei는 spec["edges"] 인덱스. 필수필드 부족·유형미상은 폴백으로 처리."""
     warnings = []
     dtype = spec.get("diagram_type", "")
     fn = RENDERERS.get(dtype)
     if fn is None:
-        return _fallback(spec, f"알 수 없는 도식 유형: {dtype}"), [f"유형 미상: {dtype}"], []
+        return _fallback(spec, f"알 수 없는 도식 유형: {dtype}"), [f"유형 미상: {dtype}"], [], []
     try:
-        svg, hits = fn(spec)
+        svg, hits, edge_hits = fn(spec)
     except AssertionError as e:
-        return _fallback(spec, f"대칭 검증 실패: {e}"), [f"대칭 검증 실패: {e}"], []
+        return _fallback(spec, f"대칭 검증 실패: {e}"), [f"대칭 검증 실패: {e}"], [], []
     except Exception as e:
-        return _fallback(spec, f"렌더 오류: {e}"), [f"렌더 오류: {e}"], []
+        return _fallback(spec, f"렌더 오류: {e}"), [f"렌더 오류: {e}"], [], []
+    # 제목·각주도 클릭해 수정/삭제할 수 있도록 hit 영역 추가
+    m = re.search(r'viewBox="0 0 ([\d.]+) ([\d.]+)"', svg)
+    if m:
+        vw, vh = float(m.group(1)), float(m.group(2))
+        if spec.get("title"):
+            tw = text_w(str(spec["title"]), FS_TITLE) + 24
+            hits.append({"id": "__title__", "x": vw / 2 - tw / 2, "y": TITLE_H - 32,
+                         "w": tw, "h": 30})
+        if spec.get("caption"):
+            cw = text_w("※ " + str(spec["caption"]), FS_CAPTION) + 12
+            hits.append({"id": "__caption__", "x": MARGIN - 4, "y": vh - CAPTION_H + 2,
+                         "w": cw, "h": CAPTION_H - 2})
     svg = _apply_size_scale(svg, spec)
     cjk = check_cjk(svg)
     if cjk:
         warnings.append(f"한자/가나 오염 {len(cjk)}건: {cjk[0]}")
-    return svg, warnings, hits
+    return svg, warnings, hits, edge_hits
 
 
 # 필수 필드 검증(사용자에게 되묻기용)
