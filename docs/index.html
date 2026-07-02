@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>사회과학 도식화 챗봇 — 설치 안내서</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#cdd5df; --border:#30363d;
+    --text:#e6edf3; --dim:#8b949e; --green:#3fb950; --blue:#58a6ff; --amber:#e3b341;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);
+    font-family:'Apple SD Gothic Neo','Malgun Gothic','Segoe UI',sans-serif;
+    line-height:1.75;padding:40px 16px}
+  .wrap{max-width:760px;margin:0 auto}
+
+  header{text-align:center;padding:28px 20px 34px;
+    border:1px solid var(--line);border-radius:18px;background:var(--panel);margin-bottom:30px}
+  header .emoji{font-size:44px}
+  header h1{font-size:27px;font-weight:800;margin:8px 0 6px}
+  header p{color:var(--dim);font-size:15px}
+  .cta{display:inline-block;margin-top:18px;padding:13px 26px;border-radius:12px;
+    background:var(--green);color:#0d1117;font-weight:800;font-size:15px;text-decoration:none}
+  .cta:hover{background:#2ea043}
+  .linknote{margin-top:12px;font-size:12px;color:var(--dim);word-break:break-all}
+
+  .step{display:flex;gap:18px;background:var(--panel);border:1px solid var(--border);
+    border-radius:16px;padding:22px 22px;margin-bottom:18px}
+  .num{flex:none;width:38px;height:38px;border-radius:50%;background:var(--green);
+    color:#0d1117;font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center}
+  .step h2{font-size:18px;font-weight:800;margin-bottom:8px}
+  .step p{color:var(--text);font-size:15px;margin-bottom:6px}
+  .step .sub{color:var(--dim);font-size:13.5px}
+  .chip{font-family:'SF Mono',Consolas,monospace;background:#0d1117;border:1px solid var(--border);
+    border-radius:6px;padding:2px 8px;font-size:13px;color:var(--green)}
+  .key{color:var(--blue);font-weight:700}
+
+  .os{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+  @media(max-width:560px){.os{grid-template-columns:1fr}}
+  .osbox{border:1px solid var(--border);border-radius:12px;padding:14px 16px;background:#0d1117}
+  .osbox .tag{font-weight:800;font-size:14px;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+  .mac .tag{color:var(--blue)} .win .tag{color:var(--green)}
+  .osbox p{font-size:13.5px;color:var(--text);margin:0}
+  .osbox .warn{color:var(--amber);font-size:12.5px;margin-top:6px}
+
+  .keysteps{margin-top:12px;padding:14px 16px;border:1px solid var(--border);
+    border-radius:12px;background:#0d1117}
+  .keysteps ol{margin-left:18px} .keysteps li{font-size:14px;margin:5px 0}
+
+  .note{background:rgba(227,179,65,.08);border:1px solid rgba(227,179,65,.35);
+    border-radius:12px;padding:14px 18px;color:#f0d488;font-size:13.5px;margin:8px 0 26px}
+  footer{text-align:center;color:var(--dim);font-size:12px;padding:20px 0 6px}
+  b{color:#fff}
+
+  .shots{margin-top:16px;display:flex;flex-direction:column;gap:14px}
+  .shots-title{font-size:13.5px;font-weight:800;color:var(--blue)}
+  .shots figure{margin:0;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#0d1117}
+  .shots figcaption{font-size:13px;color:var(--text);padding:9px 12px;border-bottom:1px solid var(--border)}
+  .shots img{width:100%;display:block}
+  .shots-note{font-size:12px;color:var(--dim);margin-top:2px}
+  /* 키 화면의 노출된 키 영역을 덧칠해 가림 */
+  .imgbox{position:relative}
+  .keymask{position:absolute;left:16%;top:47.5%;width:74%;height:5%;
+    background:#16242e;border:1px solid #2b3a47;border-radius:4px;
+    display:flex;align-items:center;justify-content:center;
+    color:#8b949e;font-size:12px;letter-spacing:1px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="emoji">📊</div>
+    <h1>사회과학 도식화 챗봇 · 설치 안내</h1>
+    <p>문서를 넣으면 논문용 학술 도식(SVG)을 그려 주는 AI 비서 · 완전 무료 · 5분이면 설치 끝</p>
+    <a class="cta" href="https://github.com/goldring-creator/diagram_chatbot/releases/latest" target="_blank">⬇ 다운로드 페이지 열기</a>
+    <div class="linknote">https://github.com/goldring-creator/diagram_chatbot/releases/latest</div>
+  </header>
+
+  <!-- STEP 1 -->
+  <div class="step">
+    <div class="num">1</div>
+    <div>
+      <h2>다운로드 페이지 접속</h2>
+      <p>위 <b>[다운로드 페이지 열기]</b> 버튼을 누릅니다. (또는 위 주소를 브라우저에 붙여넣기)</p>
+      <p class="sub">화면 맨 위 <b>Latest</b> 라고 표시된 가장 최신 버전을 사용하면 됩니다.</p>
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="step">
+    <div class="num">2</div>
+    <div>
+      <h2>본인 컴퓨터에 맞는 파일 다운로드</h2>
+      <p><b>Assets</b> 목록에서 본인 운영체제(OS)에 맞는 파일 하나만 클릭해 받습니다.</p>
+      <div class="os">
+        <div class="osbox mac">
+          <div class="tag"> Mac (애플)</div>
+          <p><span class="chip">DiagramChatbot-mac.zip</span></p>
+        </div>
+        <div class="osbox win">
+          <div class="tag">⊞ Windows</div>
+          <p><span class="chip">DiagramChatbot-windows.zip</span></p>
+        </div>
+      </div>
+      <p class="sub" style="margin-top:10px">※ <span class="chip">Source code</span> (zip / tar.gz)는 개발용입니다 — <b>받지 않아도 됩니다.</b></p>
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="step">
+    <div class="num">3</div>
+    <div>
+      <h2>압축 풀기</h2>
+      <p>받은 <span class="chip">.zip</span> 파일을 더블클릭하면 압축이 풀립니다.</p>
+      <p class="sub">보통 <b>다운로드 폴더</b>에 풀립니다. 안에 실행 파일이 들어 있습니다.</p>
+    </div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div class="step">
+    <div class="num">4</div>
+    <div>
+      <h2>앱 실행</h2>
+      <div class="os">
+        <div class="osbox mac">
+          <div class="tag"> Mac</div>
+          <p>압축 푼 <span class="chip">DiagramChatbot.app</span> 을<br><b>우클릭 → 열기 → 열기</b></p>
+          <p class="warn">⚠️ "확인되지 않은 개발자" 경고가 떠도 정상입니다. (처음 한 번만 우클릭 열기)</p>
+        </div>
+        <div class="osbox win">
+          <div class="tag">⊞ Windows</div>
+          <p>폴더 안 <span class="chip">DiagramChatbot.exe</span> 더블클릭<br>경고 시 <b>추가 정보 → 실행</b></p>
+          <p class="warn">⚠️ "Windows의 PC 보호" 경고가 떠도 정상입니다. (처음 한 번만)</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 5 -->
+  <div class="step">
+    <div class="num">5</div>
+    <div>
+      <h2>무료 NVIDIA API 키 발급 후 입력</h2>
+      <p>처음 실행하면 <b>키 입력 화면</b>이 나옵니다. 아래 순서로 무료 키를 받아 붙여넣으세요.</p>
+      <p class="sub">연구설계 챗봇을 이미 쓰고 있다면 키가 공유되어 <b>이 단계 없이 바로 시작</b>됩니다.</p>
+      <div class="keysteps">
+        <ol>
+          <li>앱의 [NVIDIA 사이트 열기] 클릭, 또는 <a href="https://build.nvidia.com" target="_blank" style="color:var(--blue);font-weight:700">여기를 눌러 NVIDIA 사이트 열기</a> → <span class="chip">build.nvidia.com</span></li>
+          <li>우측 상단 <b>Login</b> → 구글·이메일로 로그인</li>
+          <li>빨간 줄이 보이면 <b>Verify</b>(계정 인증) 클릭</li>
+          <li>아무 모델 열기 (예: <span class="chip">deepseek</span> 검색)</li>
+          <li><b>Build 탭 → Generate API Key</b> 클릭</li>
+          <li>만들어진 <span class="key">nvapi-...</span> 키 <b>Copy</b></li>
+          <li>앱 입력칸에 붙여넣고 <b>[저장하고 시작]</b></li>
+        </ol>
+      </div>
+
+      <div class="shots">
+        <div class="shots-title">📷 참고 화면 (순서대로)</div>
+        <figure><figcaption>① 쿠키 안내가 뜨면 ‘Accept All’ 클릭</figcaption><img src="img/01_cookie.png" alt="쿠키 동의"></figure>
+        <figure><figcaption>② 검색창에 ‘deepseek’ 검색 후 deepseek-v4-pro 선택</figcaption><img src="img/02_search.png" alt="모델 검색"></figure>
+        <figure><figcaption>③ ‘Before You Use AI Models’ 창에서 ‘Acknowledge &amp; Continue’ 클릭</figcaption><img src="img/03_acknowledge.png" alt="이용 동의"></figure>
+        <figure><figcaption>④ Build 탭 코드의 표시된 <b>api_key</b> 자리에 키가 들어간다. 단, 키를 받으려면 먼저 <b>우측 상단 ‘Login’</b>을 눌러야 한다.</figcaption><img src="img/04_build.png" alt="Build 코드의 api_key 위치"></figure>
+        <figure><figcaption>⑤ ‘Login’을 누르면 나오는 화면. 구글 메일이나 아무 메일을 입력하고 ‘Next’(또는 로그인 후 회원가입)하면 키를 발급받을 수 있다.</figcaption><img src="img/05_signin.png" alt="로그인 화면"></figure>
+        <figure class="masked">
+          <figcaption>⑥ ‘Generate API Key’를 누르면 그 api_key 자리에 <span class="key">nvapi-</span> 키가 나타난다. 이 키를 ‘Copy’해서 <b>우리 앱의 키 입력 화면</b>에 붙여넣으면 끝.</figcaption>
+          <div class="imgbox">
+            <img src="img/06_key.png" alt="발급된 API 키 화면">
+            <div class="keymask">🔒 발급된 nvapi- 키 (보안상 가림)</div>
+          </div>
+        </figure>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    🔒 API 키는 <b>비밀번호처럼</b> 다루세요. 키는 본인 컴퓨터에만 저장되며 외부로 전송되지 않습니다.<br>
+    💡 한 번 입력하면 다음부터는 바로 시작합니다. 그린 도식은 <span class="chip">문서 / Documents / DiagramChatbot</span> 폴더에 저장됩니다.
+  </div>
+
+  <div class="step" style="border-color:var(--green)">
+    <div class="num" style="background:var(--blue)">✓</div>
+    <div>
+      <h2>설치 완료 — 이제 사용하면 됩니다</h2>
+      <p>아래 입력칸에 연구 내용을 쓰거나 <span class="chip">📎</span>로 문서(PDF·docx·txt)를 첨부하면,
+      AI가 <b>분석틀 · 계층분류 · 흐름도 · 경로모형 · 레이더 · 시계열</b> 중 알맞은 학술 도식을 그려 줍니다.</p>
+      <p class="sub">그림이 나오면 [SVG 저장]·[PNG 저장]으로 논문에 바로 쓰고, "3번 박스 이름 바꿔"처럼 말로 수정할 수 있습니다.
+      새 버전이 나오면 다운로드 페이지에서 다시 받으면 됩니다 (키는 그대로 유지).</p>
+    </div>
+  </div>
+
+  <footer>사회과학 도식화 챗봇 · 무료 배포용 설치 안내서</footer>
+
+</div>
+</body>
+</html>

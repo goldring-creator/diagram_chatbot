@@ -49,10 +49,12 @@ C_AMBER = "#e3b341"
 C_RED = "#f85149"
 C_PREVIEW_BG = "#f4f4f4"   # 미리보기(그림) 배경 — 실제 그림은 흰 캔버스
 
+# UI 글꼴: 맥은 고정폭(한글은 애플고딕으로 자연 폴백), 윈도우는 Consolas에 한글 글리프가
+# 없어 굴림 계열로 떨어져 지저분해지므로 맑은 고딕을 직접 지정한다.
 if platform.system() == "Darwin":
     MONO = "Menlo"
 elif platform.system() == "Windows":
-    MONO = "Consolas"
+    MONO = "Malgun Gothic"
 else:
     MONO = "DejaVu Sans Mono"
 
@@ -243,7 +245,7 @@ class App(tk.Tk):
         self.send_btn.pack(side="right", fill="y", padx=(4, 6), pady=6)
         self.send_btn.bind("<Button-1>", lambda e: self._on_send_click())
         self.bind("<Escape>", lambda e: self.cancel())
-        tk.Label(ibar, text=" 지시 ▸", bg=C_BG2, fg=C_GREEN_TX,
+        tk.Label(ibar, text=" 입력 ▸", bg=C_BG2, fg=C_GREEN_TX,
                  font=(MONO, 11, "bold")).pack(side="left", anchor="n", pady=12)
         self.inp = tk.Text(ibar, bg=C_BG2, fg=C_TEXT, font=(MONO, 11), height=3, wrap="word",
                            relief="flat", bd=0, padx=6, pady=8, insertbackground=C_TEXT)
@@ -496,7 +498,10 @@ class App(tk.Tk):
         cjk = core.check_cjk(json.dumps(spec, ensure_ascii=False))
         miss = renderer.missing_fields(spec)
         if miss:
-            self._log("⚠️ 스펙에 부족한 필드: " + ", ".join(miss) + " — 내용을 더 구체적으로 적어 다시 시도해 보세요.", "warn")
+            self._log("⚠️ 도식을 그리기에 정보가 부족합니다 (" + ", ".join(miss) + ").", "warn")
+            self._log("어떤 개념·변수·단계가 들어가야 하는지 조금 더 구체적으로 적어 다시 보내 주세요.\n"
+                      "예) \"학부모 스트레스와 업무 과부하가 소진을 거쳐 교직 후회로 이어지는 경로모형\"", "sys")
+            return
 
         self.current_spec = spec
         self.last_document = self._pending_document

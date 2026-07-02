@@ -181,6 +181,8 @@ def _roots(nodes, edges):
 # ══════════════════ A. 트리 (tidy tree, 수직) ══════════════════
 def render_tree(spec) -> str:
     nodes, edges = _index(spec)
+    if not nodes:
+        return _fallback(spec, "그릴 노드가 없습니다 — 내용을 더 구체적으로 적어 주세요.")
     children = {}
     for e in edges:
         children.setdefault(e["from"], []).append(e["to"])
@@ -246,6 +248,8 @@ def render_tree(spec) -> str:
 # ══════════════════ B. 플로우차트 (주경로 체인 + 오른쪽 분기) ══════════════════
 def render_flowchart(spec) -> str:
     nodes, edges = _index(spec)
+    if not nodes:
+        return _fallback(spec, "그릴 노드가 없습니다 — 내용을 더 구체적으로 적어 주세요.")
     order = [n["id"] for n in spec.get("nodes", []) if n.get("id") in nodes]
     outdeg = {}
     for e in edges:
@@ -385,6 +389,8 @@ def render_framework(spec):
 
 def _render_horizontal(spec, emphasize_last) -> str:
     nodes, edges = _index(spec)
+    if not nodes:
+        return _fallback(spec, "그릴 노드가 없습니다 — 내용을 더 구체적으로 적어 주세요.")
     layer, order = _layers(nodes, edges)
     maxlayer = max(layer.values()) if layer else 0
     cols = {}

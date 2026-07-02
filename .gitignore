@@ -3,3 +3,9 @@ __pycache__/
 .claude/
 .DS_Store
 Thumbs.db
+
+# 빌드 산출물 (배포는 GitHub Release로)
+DiagramChatbot.exe
+dist/
+build/
+*.zip
