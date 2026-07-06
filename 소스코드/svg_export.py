@@ -7,12 +7,17 @@ cairosvg(시스템 cairo 필요) 폴백. 한글은 시스템 글꼴로 렌더되
 """
 
 import os
+import pathlib
 
 
 def save_svg(svg_text: str, path: str):
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(svg_text)
-    return path
+    """(path, None) 또는 (None, 오류메시지)."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(svg_text)
+    except OSError as e:
+        return None, f"SVG 저장 오류: {e}"
+    return path, None
 
 
 def _render_png(svg_text: str, scale: float):
@@ -57,8 +62,11 @@ def svg_to_png(svg_text: str, path: str, scale: float = 2.0):
     data, err = _render_png(svg_text, scale)
     if err:
         return None, err
-    with open(path, "wb") as f:
-        f.write(data)
+    try:
+        with open(path, "wb") as f:
+            f.write(data)
+    except OSError as e:
+        return None, f"PNG 저장 오류: {e}"
     return path, None
 
 
@@ -68,14 +76,19 @@ def png_bytes(svg_text: str, scale: float = 1.5):
 
 
 def open_in_browser(svg_text: str, tmp_dir: str):
-    """브라우저로 크게 미리보기: SVG를 임시 HTML로 감싸 연다."""
+    """브라우저로 크게 미리보기: SVG를 임시 HTML로 감싸 연다.
+    성공하면 파일 경로, 실패하면 None."""
     import webbrowser
-    os.makedirs(tmp_dir, exist_ok=True)
-    html_path = os.path.join(tmp_dir, "_preview.html")
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(f'<!DOCTYPE html><html><head><meta charset="utf-8">'
-                f'<title>도식 미리보기</title></head>'
-                f'<body style="margin:0;background:#f0f0f0;display:flex;'
-                f'justify-content:center;padding:20px">{svg_text}</body></html>')
-    webbrowser.open("file://" + html_path)
-    return html_path
+    try:
+        os.makedirs(tmp_dir, exist_ok=True)
+        html_path = os.path.join(tmp_dir, "_preview.html")
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(f'<!DOCTYPE html><html><head><meta charset="utf-8">'
+                    f'<title>도식 미리보기</title></head>'
+                    f'<body style="margin:0;background:#f0f0f0;display:flex;'
+                    f'justify-content:center;padding:20px">{svg_text}</body></html>')
+        # 윈도우 백슬래시·한글 경로는 "file://"+str 조립 시 브라우저가 못 열 수 있다
+        webbrowser.open(pathlib.Path(html_path).as_uri())
+        return html_path
+    except OSError:
+        return None

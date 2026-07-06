@@ -5,7 +5,10 @@ __pycache__/
 Thumbs.db
 
 # 빌드 산출물 (배포는 GitHub Release로)
-DiagramChatbot.exe
+*.exe
 dist/
 build/
 *.zip
+
+# 비밀·환경 파일
+.env

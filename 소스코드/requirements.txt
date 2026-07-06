@@ -1,10 +1,10 @@
 # 도식화 챗봇 의존성
 # 필수 (도식 스펙 산출 + SVG 생성 + 문서 읽기)
-openai>=1.30
+openai>=1.30,<2    # 2.x는 파괴적 변경 가능 — 검증 후 올린다
 pypdf>=4.0
 python-docx>=1.1
 
-resvg-py>=0.3      # SVG→PNG 변환·미리보기 (러스트 resvg 내장 wheel — 시스템 라이브러리 불필요)
+resvg-py>=0.3,<1   # SVG→PNG 변환·미리보기 (러스트 resvg 내장 wheel — 시스템 라이브러리 불필요)
 
 # 선택 (있으면 기능 확장)
 pymupdf>=1.24      # 스캔 PDF·이미지 OCR (없으면 텍스트 PDF만)

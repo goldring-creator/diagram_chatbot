@@ -300,7 +300,9 @@ def render_tree(spec) -> str:
         if pid in pos and pid not in offset_ids and placed and len(placed) == len(
                 [k for k in kids if k in pos]):
             mid = sum(pos[k][0] for k in placed) / len(placed)
-            assert abs(pos[pid][0] - mid) < 0.5, f"트리 대칭 위반: {pid}"
+            # assert문은 python -O 실행 시 제거되므로 명시적으로 검사한다
+            if abs(pos[pid][0] - mid) >= 0.5:
+                raise AssertionError(f"트리 대칭 위반: {pid}")
     return "".join(body), hits, ehits
 
 
@@ -717,7 +719,12 @@ def render_radar(spec) -> str:
     width, height = 720, 620
     cx, cy = width / 2, TITLE_H + (height - TITLE_H - CAPTION_H) / 2 + 6
     R = min(width, height - TITLE_H - CAPTION_H) / 2 - 90
-    maxval = max([max(s.get("values", [1])) for s in series] + [1])
+    # 값이 비었거나 숫자가 아니어도 전체가 렌더 오류로 죽지 않게 정화한다
+    clean_vals = {}
+    for si, s in enumerate(series):
+        clean_vals[si] = [v if isinstance(v, (int, float)) else 0
+                          for v in (s.get("values") or [])]
+    maxval = max([max(vs) for vs in clean_vals.values() if vs] + [1])
 
     def pt(i, r):
         ang = -math.pi / 2 + i * 2 * math.pi / n
@@ -743,7 +750,7 @@ def render_radar(spec) -> str:
     grays = ["#333333", "#666666", "#999999", "#bbbbbb"]
     dashes = ["", "6,4", "3,3", "2,3"]
     for si, s in enumerate(series):
-        vals = s.get("values", [])
+        vals = clean_vals[si]
         pts = " ".join(f"{x:.1f},{y:.1f}"
                        for x, y in (pt(i, R * (vals[i] / maxval)) for i in range(min(n, len(vals)))))
         g = grays[si % len(grays)]
@@ -822,7 +829,8 @@ def render_timeline(spec) -> str:
         evs = sorted(evs, key=lambda e: e.get("year", start))
         cyl = top + li * lane_h + (lane_h - 10) / 2
         for a, b in zip(evs, evs[1:]):
-            body.append(_edge_line(xof(a["year"]) + 6, cyl, xof(b["year"]) - 8, cyl, "solid"))
+            body.append(_edge_line(xof(a.get("year", start)) + 6, cyl,
+                                   xof(b.get("year", start)) - 8, cyl, "solid"))
         for ev in evs:
             xx = xof(ev.get("year", start))
             strong = ev.get("weight") == "강"

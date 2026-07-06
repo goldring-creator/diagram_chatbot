@@ -31,8 +31,16 @@ import svg_export
 DATA_DIR = os.path.expanduser("~/Documents/DiagramChatbot")
 OUT_DIR = os.path.join(DATA_DIR, "outputs")
 TMP_DIR = os.path.join(DATA_DIR, "tmp")
-os.makedirs(OUT_DIR, exist_ok=True)
-os.makedirs(TMP_DIR, exist_ok=True)
+try:
+    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(TMP_DIR, exist_ok=True)
+except OSError:
+    # 문서 폴더를 만들 수 없는 환경(권한·동기화 잠금)에서도 앱은 뜨게 임시 폴더로 대체
+    DATA_DIR = os.path.join(tempfile.gettempdir(), "DiagramChatbot")
+    OUT_DIR = os.path.join(DATA_DIR, "outputs")
+    TMP_DIR = os.path.join(DATA_DIR, "tmp")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(TMP_DIR, exist_ok=True)
 
 # ── 어두운 테마 (연구설계 챗봇과 동일 팔레트) ──
 C_BG = "#0d1117"
@@ -59,7 +67,7 @@ else:
     MONO = "DejaVu Sans Mono"
 
 NVIDIA_URL = "https://build.nvidia.com"
-APP_VERSION = "0.3.3"
+APP_VERSION = "0.3.4"
 
 DTYPE_LABELS = {
     "framework": "분석틀", "tree": "계층·분류", "flowchart": "흐름·절차",
@@ -177,8 +185,9 @@ class App(tk.Tk):
         self._pending_keep = None      # 수정지시 시 유지할 offsets/size_scale
 
         key = core.load_key()
-        if core.valid_key_format(key):
-            self.client = core.make_client(key)
+        self.api_key = key if core.valid_key_format(key) else ""
+        if self.api_key:
+            self.client = core.make_client(self.api_key)
             self.build_main()
         else:
             self.build_onboarding()
@@ -242,10 +251,22 @@ class App(tk.Tk):
         link.bind("<Button-1>", lambda e: webbrowser.open(NVIDIA_URL))
         tk.Label(top, text="🔑  발급받은 API 키 붙여넣기", bg=C_BG, fg=C_TEXT,
                  font=(MONO, 11, "bold")).pack(anchor="w")
-        self.key_entry = tk.Entry(top, bg="#ffffff", fg="#1A1A1A", insertbackground="#1A1A1A",
+        key_row = tk.Frame(top, bg=C_BG)
+        key_row.pack(fill="x", pady=(6, 4))
+        self.key_entry = tk.Entry(key_row, bg="#ffffff", fg="#1A1A1A", insertbackground="#1A1A1A",
                                   font=(MONO, 12), relief="flat", highlightthickness=1,
-                                  highlightbackground=C_BORDER, highlightcolor=C_BLUE)
-        self.key_entry.pack(fill="x", ipady=8, pady=(6, 4))
+                                  highlightbackground=C_BORDER, highlightcolor=C_BLUE,
+                                  show="•")
+        self.key_entry.pack(side="left", fill="x", expand=True, ipady=8)
+        show_btn = tk.Label(key_row, text="👁 보기", bg=C_BG2, fg=C_DIM, cursor="hand2",
+                            font=(MONO, 10), padx=8, pady=8)
+        show_btn.pack(side="left", padx=(6, 0))
+
+        def _toggle_key_show(_e=None):
+            hidden = self.key_entry.cget("show") == "•"
+            self.key_entry.configure(show="" if hidden else "•")
+            show_btn.configure(text="🙈 가리기" if hidden else "👁 보기")
+        show_btn.bind("<Button-1>", _toggle_key_show)
         self.key_entry.focus_set()
         self._enable_clipboard(self.key_entry)
         tk.Label(top, text="🔒 이 키는 당신 컴퓨터에만 저장되며 외부로 전송되지 않습니다.",
@@ -258,7 +279,11 @@ class App(tk.Tk):
                                  "키는 nvapi- 로 시작하는 영문/숫자여야 합니다.\n"
                                  "한글이나 빈칸이 섞이지 않았는지 확인하세요.")
             return
-        core.save_key(key)
+        err = core.save_key(key)
+        if err:
+            messagebox.showerror("키 저장 실패", err)
+            return
+        self.api_key = key
         self.client = core.make_client(key)
         self.build_main()
 
@@ -296,6 +321,8 @@ class App(tk.Tk):
         self.send_btn.bind("<Button-1>", lambda e: self._on_send_click())
         self.bind("<Escape>", lambda e: self.cancel())
         self.bind("<Control-z>", self._on_ctrl_z)
+        if platform.system() == "Darwin":
+            self.bind("<Command-z>", self._on_ctrl_z)   # 맥 표준 되돌리기 단축키
         tk.Label(ibar, text=" 입력 ▸", bg=C_BG2, fg=C_GREEN_TX,
                  font=(MONO, 11, "bold")).pack(side="left", anchor="n", pady=12)
         self.inp = tk.Text(ibar, bg=C_BG2, fg=C_TEXT, font=(MONO, 11), height=3, wrap="word",
@@ -353,6 +380,9 @@ class App(tk.Tk):
         self.preview.pack(side="top", fill="both", expand=True)
         self.preview.bind("<Configure>", lambda e: self._redraw_preview())
         self.preview.bind("<Control-MouseWheel>", self._on_pv_wheel)
+        # 리눅스(X11)는 휠이 MouseWheel이 아니라 Button-4/5로 온다
+        self.preview.bind("<Control-Button-4>", lambda e: self._pv_zoom(1.1))
+        self.preview.bind("<Control-Button-5>", lambda e: self._pv_zoom(1 / 1.1))
         self.preview.bind("<ButtonPress-1>", self._on_pv_press)
         self.preview.bind("<Shift-ButtonPress-1>", self._on_pv_connect_press)
         self.preview.bind("<B1-Motion>", self._on_pv_motion)
@@ -391,6 +421,10 @@ class App(tk.Tk):
         self._log(f"→ 모델 변경: {core.MODEL_LABELS[k]}", "sys")
 
     def change_key(self):
+        if self.busy:
+            # 작업 중 화면을 갈아엎으면 워커가 파괴된 위젯에 로그를 쓰다 죽는다
+            messagebox.showinfo("잠시만요", "진행 중인 작업이 끝난 뒤(또는 중지 후) 키를 변경해 주세요.")
+            return
         if messagebox.askyesno("키 변경", "API 키를 다시 입력하시겠습니까?"):
             self.build_onboarding()
 
@@ -496,17 +530,22 @@ class App(tk.Tk):
         self.after(80, self._poll_attach)
 
     def _attach_worker(self, paths):
-        key = core.load_key(); parts, names = [], []
-        for p in paths:
-            if self._cancel:
-                break
-            base = os.path.basename(p)
-            content, err = core.read_file_ocr(
-                p, key, progress=lambda m, b=base: self.q.put(("prog", f"{b} — {m}")),
-                should_cancel=lambda: self._cancel)
-            if err:
-                self.q.put(("warn", f"{base}: {err}")); continue
-            parts.append(f"[파일: {base}]\n{content}"); names.append(base)
+        # 최상위 예외를 잡지 않으면 스레드만 죽고 busy가 영원히 풀리지 않는다
+        parts, names = [], []
+        try:
+            key = self.api_key or core.load_key()
+            for p in paths:
+                if self._cancel:
+                    break
+                base = os.path.basename(p)
+                content, err = core.read_file_ocr(
+                    p, key, progress=lambda m, b=base: self.q.put(("prog", f"{b} — {m}")),
+                    should_cancel=lambda: self._cancel)
+                if err:
+                    self.q.put(("warn", f"{base}: {err}")); continue
+                parts.append(f"[파일: {base}]\n{content}"); names.append(base)
+        except Exception as e:
+            self.q.put(("warn", f"파일 처리 중 오류: {e}"))
         self.q.put(("attached", ("\n\n".join(parts), names)))
 
     def _poll_attach(self):
@@ -520,6 +559,9 @@ class App(tk.Tk):
                 elif kind == "attached":
                     doc, names = data
                     self.busy = False; self._set_go()
+                    if self._cancel:                     # 중지했으면 부분 결과로 AI 호출하지 않는다
+                        self._cancel = False
+                        self._log("중지했습니다.", "sys"); return
                     if not doc.strip():
                         self._log("읽어들인 내용이 없습니다.", "warn"); return
                     self._log(f"📎 {len(names)}개 문서 읽음 → 도식 설계 시작: {', '.join(names)}", "sys")
@@ -548,8 +590,11 @@ class App(tk.Tk):
         self._animate()
 
     def _spec_worker(self, user_content):
-        spec, raw, err = core.get_spec(self.client, self.model_key, user_content,
-                                       should_cancel=lambda: self._cancel)
+        try:
+            spec, raw, err = core.get_spec(self.client, self.model_key, user_content,
+                                           should_cancel=lambda: self._cancel)
+        except Exception as e:   # 예상 밖 예외로 스레드가 죽으면 busy가 영원히 안 풀린다
+            spec, raw, err = None, "", str(e)
         self.q.put(("spec", (spec, raw, err)))
 
     def _animate(self):
@@ -794,9 +839,11 @@ class App(tk.Tk):
 
     # ── 인터랙션: 줌·팬·드래그·더블클릭 수정 ──
     def _on_pv_wheel(self, e):
+        self._pv_zoom(1.1 if e.delta > 0 else 1 / 1.1)
+
+    def _pv_zoom(self, factor):
         if not self.current_svg:
             return
-        factor = 1.1 if e.delta > 0 else 1 / 1.1
         self._view_zoom = max(0.2, min(4.0, self._view_zoom * factor))
         self._redraw_preview()
 
@@ -856,7 +903,16 @@ class App(tk.Tk):
             dx, dy = e.x - d["x0"], e.y - d["y0"]
             self._pan[0] = d["pan0"][0] + dx
             self._pan[1] = d["pan0"][1] + dy
-            self._redraw_preview()
+            # 팬 중 매번 PNG 재렌더는 큰 도식에서 심하게 버벅인다 —
+            # 이미 그려진 캔버스 아이템만 이동하고 원점도 같이 갱신(클릭 판정 유지)
+            pdx, pdy = d.get("moved", (0, 0))
+            mdx, mdy = dx - pdx, dy - pdy
+            d["moved"] = (dx, dy)
+            c.delete("hover")
+            c.move("img", mdx, mdy)
+            c.move("szhandle", mdx, mdy)
+            ox, oy = self._img_origin
+            self._img_origin = (ox + mdx, oy + mdy)
         elif d["mode"] == "resize":
             if not self._preview_img:
                 return
@@ -919,7 +975,10 @@ class App(tk.Tk):
                 spec.setdefault("edges", []).append(
                     {"from": src_id, "to": target["id"], "style": "solid"})
                 self._rerender_local(f"화살표 추가: {src_id} → {target['id']}")
-            new_ei = spec["edges"].index(dup if dup is not None else spec["edges"][-1])
+                new_ei = len(spec["edges"]) - 1
+            else:
+                # list.index는 내용이 같은 다른 엣지를 먼저 찾을 수 있어 동일 객체로 판정
+                new_ei = next((i for i, ed in enumerate(spec["edges"]) if ed is dup), -1)
             ehit = next((h for h in self.current_edge_hits if h.get("ei") == new_ei), None)
             if ehit:                                    # 바로 라벨·선 종류 정하게 수정창 열기
                 self._begin_edge_edit(ehit)
@@ -1201,7 +1260,8 @@ class App(tk.Tk):
     def open_browser(self):
         if not self.current_svg:
             self._log("먼저 도식을 그려 주세요.", "sys"); return
-        svg_export.open_in_browser(self.current_svg, TMP_DIR)
+        if svg_export.open_in_browser(self.current_svg, TMP_DIR) is None:
+            self._log("⚠️ 미리보기 파일을 만들지 못했습니다. 디스크 권한을 확인해 주세요.", "warn")
 
     # ════════ 저장 ════════
     def save_output(self, kind):
@@ -1215,7 +1275,9 @@ class App(tk.Tk):
                                   filetypes=[("SVG 벡터", "*.svg")])
             if not path:
                 return
-            svg_export.save_svg(self.current_svg, path)
+            ok, err = svg_export.save_svg(self.current_svg, path)
+            if err:
+                self._log("⚠️ " + err, "warn"); return
             self._log(f"📤 SVG 저장됨: {path}", "sys"); self._open_file(path)
         else:
             if not svg_export.png_available():
@@ -1240,7 +1302,11 @@ class App(tk.Tk):
             else:
                 subprocess.run(["xdg-open", path], check=False)
         except Exception:
-            webbrowser.open("file://" + path)
+            try:
+                import pathlib
+                webbrowser.open(pathlib.Path(path).as_uri())
+            except Exception:
+                pass
 
     # ════════ 공통 ════════
     def cancel(self):
@@ -1300,6 +1366,11 @@ class App(tk.Tk):
                 subprocess.run(["osascript", "-e",
                                 f'display notification "{message}" with title "{title}" sound name "Glass"'],
                                check=False, capture_output=True)
+            elif platform.system() == "Windows":
+                # 다른 창을 보고 있을 때 작업표시줄 아이콘을 깜빡여 완료를 알린다
+                import ctypes
+                hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+                ctypes.windll.user32.FlashWindow(hwnd, True)
         except Exception:
             pass
 
@@ -1318,6 +1389,14 @@ def _macos_redraw_nudge(app):
 
 
 if __name__ == "__main__":
+    if platform.system() == "Windows":
+        # 고DPI(125~200%) 모니터에서 UI·미리보기가 흐릿하게 확대되는 것 방지.
+        # 창 생성 전에 선언해야 하며, 미지원 윈도우에서는 조용히 넘어간다.
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
     _app = App()
     if platform.system() == "Darwin":
         _app.after(200, lambda: _macos_redraw_nudge(_app))

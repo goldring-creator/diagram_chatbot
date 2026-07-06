@@ -73,17 +73,20 @@ class _HTMLText(HTMLParser):
         return re.sub(r"\n{3,}", "\n\n", out).strip()
 
 
-def _read_html(path: str) -> str:
+def _read_text_any(path: str) -> str:
+    """텍스트 파일을 인코딩 폴백(utf-8-sig → cp949 → euc-kr)으로 읽는다."""
     for enc in ("utf-8-sig", "cp949", "euc-kr"):
         try:
             with open(path, "r", encoding=enc) as f:
-                raw = f.read()
-            break
+                return f.read()
         except UnicodeDecodeError:
             continue
-    else:
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            raw = f.read()
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        return f.read()
+
+
+def _read_html(path: str) -> str:
+    raw = _read_text_any(path)
     p = _HTMLText()
     p.feed(raw)
     return p.text()
@@ -101,8 +104,17 @@ def load_key() -> str:
 
 
 def save_key(key: str):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump({"api_key": key.strip()}, f, ensure_ascii=False)
+    """키 저장. 성공하면 None, 실패하면 오류 메시지 문자열."""
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump({"api_key": key.strip()}, f, ensure_ascii=False)
+    except OSError as e:
+        return f"키 파일을 저장할 수 없습니다: {e}"
+    try:
+        os.chmod(CONFIG_PATH, 0o600)   # 다중 사용자 환경 노출 방지 (윈도우는 사실상 무시됨)
+    except OSError:
+        pass
+    return None
 
 
 def valid_key_format(key: str) -> bool:
@@ -111,7 +123,8 @@ def valid_key_format(key: str) -> bool:
 
 
 def make_client(key: str) -> OpenAI:
-    return OpenAI(base_url=BASE_URL, api_key=key.strip())
+    # timeout 미지정 시 SDK 기본 600초 — 그동안 '중지'가 듣지 않으므로 명시한다
+    return OpenAI(base_url=BASE_URL, api_key=key.strip(), timeout=120.0)
 
 
 # ── 한자/가나 오염 검사 ──
@@ -133,8 +146,8 @@ def read_file(path: str):
     ext = os.path.splitext(path)[1].lower()
     try:
         if ext in (".txt", ".md"):
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read(), None
+            # utf-8만 쓰면 cp949(옛 메모장 기본) 문서의 한글이 통째로 소실된다
+            return _read_text_any(path), None
         if ext in (".html", ".htm"):
             text = _read_html(path)
             if not text:
@@ -142,8 +155,9 @@ def read_file(path: str):
             return text, None
         if ext == ".pdf":
             from pypdf import PdfReader
-            reader = PdfReader(path)
-            text = "\n".join((p.extract_text() or "") for p in reader.pages).strip()
+            with open(path, "rb") as fh:
+                reader = PdfReader(fh)
+                text = "\n".join((p.extract_text() or "") for p in reader.pages).strip()
             if not text:
                 return None, "이미지로 스캔된 PDF로 보입니다 — 텍스트를 추출할 수 없습니다."
             return text, None
@@ -237,11 +251,15 @@ def read_file_ocr(path: str, key: str, progress=None, should_cancel=None):
             return None, "이미지 OCR 구성요소(PyMuPDF)가 설치되어 있지 않습니다."
         if progress:
             progress("이미지 OCR 처리 중…")
+        doc = None
         try:
             doc = fitz.open(path)
             img = _render_under_limit(doc.load_page(0))
         except Exception as e:
             return None, f"이미지 열기 오류: {e}"
+        finally:
+            if doc is not None:
+                doc.close()
         text, err = ocr_image_bytes(key, img)
         if err:
             return None, err
@@ -270,25 +288,28 @@ def _ocr_pdf(path, key, progress=None, should_cancel=None):
 
     pages = min(total, OCR_MAX_PAGES)
     out = []
-    for i in range(pages):
-        if should_cancel and should_cancel():
-            return None, "사용자가 중지했습니다."
-        if progress:
-            progress(f"스캔 문서 OCR 처리 중… ({i + 1}/{pages}쪽)")
-        try:
-            img = _render_under_limit(doc.load_page(i))
-        except Exception as e:
-            return None, f"{i + 1}쪽 렌더링 오류: {e}"
-        text, err = ocr_image_bytes(key, img)
-        if err and _is_rate_limit(err):
-            time.sleep(20)
+    try:
+        for i in range(pages):
+            if should_cancel and should_cancel():
+                return None, "사용자가 중지했습니다."
+            if progress:
+                progress(f"스캔 문서 OCR 처리 중… ({i + 1}/{pages}쪽)")
+            try:
+                img = _render_under_limit(doc.load_page(i))
+            except Exception as e:
+                return None, f"{i + 1}쪽 렌더링 오류: {e}"
             text, err = ocr_image_bytes(key, img)
-        if err:
-            return None, err
-        if text:
-            out.append(text)
-        if i < pages - 1:
-            time.sleep(OCR_PAGE_GAP)
+            if err and _is_rate_limit(err):
+                time.sleep(20)
+                text, err = ocr_image_bytes(key, img)
+            if err:
+                return None, err
+            if text:
+                out.append(text)
+            if i < pages - 1:
+                time.sleep(OCR_PAGE_GAP)
+    finally:
+        doc.close()
 
     result = "\n\n".join(out).strip()
     if not result:
@@ -356,7 +377,8 @@ def get_spec(client, model_key, user_content, should_cancel=None):
     if model_key == "deepseek":
         kwargs["extra_body"] = {"chat_template_kwargs": {"thinking": False}}
 
-    attempt = 0
+    json_retried = False   # JSON 재요청(1회)과 429 대기 횟수는 별도로 센다
+    rate_tries = 0
     while True:
         if should_cancel and should_cancel():
             return None, "", "사용자가 중지했습니다."
@@ -371,8 +393,8 @@ def get_spec(client, model_key, user_content, should_cancel=None):
                     return None, text, ("도식이 너무 커서 응답이 잘렸습니다. "
                                         "문서를 나누거나 핵심 부분만 다시 시도해 주세요.")
                 # 한 번 더 강하게 JSON만 요청 (직전 응답을 대화에 포함해야 모델이 참조 가능)
-                if attempt == 0:
-                    attempt += 1
+                if not json_retried:
+                    json_retried = True
                     kwargs["messages"].append({"role": "assistant", "content": text})
                     kwargs["messages"].append(
                         {"role": "user",
@@ -382,8 +404,12 @@ def get_spec(client, model_key, user_content, should_cancel=None):
             return spec, text, None
         except Exception as e:
             msg = str(e)
-            if _is_rate_limit(msg) and attempt < len(RETRY_WAITS):
-                time.sleep(RETRY_WAITS[attempt])
-                attempt += 1
+            if _is_rate_limit(msg) and rate_tries < len(RETRY_WAITS):
+                # 통짜 sleep이면 '중지'가 최대 60초 늦게 듣는다 — 1초 단위로 취소 확인
+                for _ in range(RETRY_WAITS[rate_tries]):
+                    if should_cancel and should_cancel():
+                        return None, "", "사용자가 중지했습니다."
+                    time.sleep(1)
+                rate_tries += 1
                 continue
             return None, "", msg
