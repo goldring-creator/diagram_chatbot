@@ -1,6 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 # macOS .app 빌드 전용 스펙 (윈도우용 DiagramChatbot.spec와 별도)
+import os
 from PyInstaller.utils.hooks import collect_all
+
+# 버전은 CI가 git 태그에서 뽑아 APP_VER 환경변수로 주입한다(로컬 빌드 시 기본 0.0.0)
+APP_VER = os.environ.get('APP_VER', '0.0.0')
 
 datas = []
 binaries = []
@@ -60,7 +64,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'DiagramChatbot',
         'CFBundleDisplayName': '도식화 챗봇',
-        'CFBundleShortVersionString': '0.3.5',
+        'CFBundleShortVersionString': APP_VER,
+        'CFBundleVersion': APP_VER,
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '11.0',
     },

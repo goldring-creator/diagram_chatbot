@@ -28,6 +28,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Resolve version
+        id: ver
+        shell: bash
+        # 태그 푸시면 태그(v0.3.6→0.3.6), 수동 실행이면 app.py의 APP_VERSION을 쓴다
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V=$(grep -E '^APP_VERSION' "소스코드/app.py" | sed -E 's/.*"([0-9.]+)".*/\1/')
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $V"
+
       - name: Install dependencies
         working-directory: 소스코드
         run: |
@@ -35,9 +48,21 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build app
+      - name: Build app (macOS)
+        if: matrix.os == 'macos-latest'
         working-directory: 소스코드
-        run: pyinstaller --noconfirm --windowed --name DiagramChatbot --collect-all pymupdf app.py
+        env:
+          APP_VER: ${{ steps.ver.outputs.version }}   # 스펙이 Info.plist에 주입
+        run: pyinstaller --noconfirm --clean DiagramChatbot-mac.spec
+
+      - name: Build app (Windows)
+        if: matrix.os == 'windows-latest'
+        working-directory: 소스코드
+        shell: bash
+        run: |
+          python make_win_version.py "${{ steps.ver.outputs.version }}" version_info.txt
+          pyinstaller --noconfirm --windowed --name DiagramChatbot \
+            --collect-all pymupdf --version-file version_info.txt app.py
 
       - name: Zip (macOS)
         if: matrix.os == 'macos-latest'
