@@ -6,6 +6,7 @@ Thumbs.db
 
 # 빌드 산출물 (배포는 GitHub Release로)
 *.exe
+*.app/
 dist/
 build/
 *.zip

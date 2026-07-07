@@ -42,9 +42,9 @@ jobs:
       - name: Zip (macOS)
         if: matrix.os == 'macos-latest'
         working-directory: 소스코드
-        run: |
-          cd dist
-          zip -r ../../${{ matrix.artifact }}.zip DiagramChatbot.app
+        # ditto는 심볼릭 링크·.app 구조를 보존한다. (zip -r은 링크를 원본으로 복제해
+        # libmupdf.dylib 등이 4중 중복되며 용량이 3배로 부풀었다)
+        run: ditto -c -k --keepParent dist/DiagramChatbot.app ../${{ matrix.artifact }}.zip
 
       - name: Zip (Windows)
         if: matrix.os == 'windows-latest'
