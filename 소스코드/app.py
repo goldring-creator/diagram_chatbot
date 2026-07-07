@@ -67,7 +67,7 @@ else:
     MONO = "DejaVu Sans Mono"
 
 NVIDIA_URL = "https://build.nvidia.com"
-APP_VERSION = "0.3.7"
+APP_VERSION = "0.3.8"
 
 DTYPE_LABELS = {
     "framework": "분석틀", "tree": "계층·분류", "flowchart": "흐름·절차",
@@ -321,9 +321,45 @@ class App(tk.Tk):
             self._menu_do(self._clip_cut)
         elif ch == "a":
             self._menu_do(self._clip_all)
+        elif e.char and ("가" <= e.char <= "힣" or "ㄱ" <= e.char <= "ㆎ"):
+            # 한글 조합 중(미확정) ⌘키를 누르면 Tk가 조합을 취소하며 마지막 글자를
+            # 지워버린다(marked-text 삭제 — 실측 확인). 삭제 완료 후(after_idle)
+            # 내용을 대조해 복원한다. 삭제가 flush 전·후 어느 쪽이든 _heal_composed가 처리.
+            w = e.widget
+            if isinstance(w, (tk.Text, tk.Entry)):
+                before = self._editable_text(w)
+                self.after_idle(lambda: self._heal_composed(w, e.char, before))
+            return None    # 이벤트 자체는 정상 흐름 유지 (조합 처리 방해 금지)
         else:
-            return None    # 그 외 ⌘조합(⌘Z·⌘Q·한글 조합 flush 등)은 정상 흐름 유지
+            return None    # 그 외 ⌘조합(⌘Z·⌘Q 등)은 정상 흐름 유지
         return "break"
+
+    @staticmethod
+    def _editable_text(w):
+        return w.get("1.0", "end-1c") if isinstance(w, tk.Text) else w.get()
+
+    def _heal_composed(self, w, ch, before):
+        # ⌘키로 조합이 취소돼 사라진 마지막 글자를 복원.
+        # 실측(v0.3.8 진단 로그): Tk는 조합 글자를 '삭제한 뒤' flush 이벤트를 보낸다
+        # (FLUSH before='안' → HEAL path2 '안'→'안녕'). 반대 순서(경로1)도 방어적으로
+        # 유지한다. 조합이 글 끝이 아닌 중간 위치면 안전하게 건너뜀(오삽입 방지).
+        try:
+            if not w.winfo_exists():
+                return
+            now = self._editable_text(w)
+            if before.endswith(ch) and now == before[:-len(ch)]:
+                # 경로1: flush 시점엔 글자가 있었고 그 후 삭제됨 → 복원
+                w.insert("insert", ch)
+            elif now == before and not now.endswith(ch):
+                # 경로2(실측 확인된 실제 경로): flush 이전에 이미 삭제됨 → 복원
+                # 중복 flush의 두 번째 호출은 now != before가 되어 재삽입 없음
+                w.insert("insert", ch)
+            else:
+                return    # 삭제 없음·중복 flush·중간 위치 조합 등 — 아무것도 안 함
+            if isinstance(w, tk.Text) and w.tag_ranges("sel"):
+                w.tag_add("sel", "1.0", "end-1c")    # 전체선택 중이면 복원분 포함
+        except Exception:
+            pass
 
     def _btn(self, parent, text, cmd, fg=C_TEXT, bg=C_BG2, hover="#21262d", font=None, pady=6, padx=10):
         lbl = tk.Label(parent, text=text, fg=fg, bg=bg, cursor="hand2",
