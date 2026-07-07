@@ -67,7 +67,7 @@ else:
     MONO = "DejaVu Sans Mono"
 
 NVIDIA_URL = "https://build.nvidia.com"
-APP_VERSION = "0.3.6"
+APP_VERSION = "0.3.7"
 
 DTYPE_LABELS = {
     "framework": "분석틀", "tree": "계층·분류", "flowchart": "흐름·절차",
@@ -192,20 +192,137 @@ class App(tk.Tk):
         else:
             self.build_onboarding()
 
-    # ── 클립보드 단축키 (macOS 보완) ──
-    def _enable_clipboard(self, w):
-        for mod in ("Command", "Control"):
-            w.bind(f"<{mod}-v>", lambda e: (e.widget.event_generate("<<Paste>>"), "break")[1])
-            w.bind(f"<{mod}-c>", lambda e: (e.widget.event_generate("<<Copy>>"), "break")[1])
-            w.bind(f"<{mod}-x>", lambda e: (e.widget.event_generate("<<Cut>>"), "break")[1])
-            w.bind(f"<{mod}-a>", self._select_all_evt)
+        # Edit 메뉴바(복사·붙여넣기)는 창이 실현된 뒤 설정해야 aqua 기본 메뉴에 덮이지 않는다
+        self._build_menubar()
+        self.after_idle(self._build_menubar)
 
-    def _select_all_evt(self, e):
-        w = e.widget
+    # ── 클립보드 (macOS 프로즌 앱에서 Command 단축키가 위젯에 전달 안 되는 문제 대응) ──
+    # event_generate("<<Paste>>") 방식은 프로즌 .app에서 동작하지 않아 직접 구현으로 교체.
+    # 여기에 더해 Edit 메뉴바(_build_menubar)를 두어 macOS가 Command 키를 메뉴로 라우팅하게 한다.
+    def _focused_editable(self):
+        # 메뉴를 클릭하면 포커스가 메뉴로 넘어가므로, 현재 포커스가 편집창이 아니면
+        # 마지막으로 포커스됐던 편집창(_last_editable)을 사용한다.
+        w = self.focus_get()
+        if isinstance(w, (tk.Text, tk.Entry)):
+            return w
+        w = getattr(self, "_last_editable", None)
         try:
-            w.select_range(0, "end")
+            if w is not None and w.winfo_exists():
+                return w
         except Exception:
-            w.tag_add("sel", "1.0", "end-1c")
+            pass
+        return None
+
+    def _clip_copy(self, w):
+        sel = ""
+        try:
+            if isinstance(w, tk.Text):
+                if w.tag_ranges("sel"):
+                    sel = w.get("sel.first", "sel.last")
+            elif w.selection_present():
+                sel = w.get()[w.index("sel.first"):w.index("sel.last")]
+        except Exception:
+            sel = ""
+        if sel:
+            self.clipboard_clear(); self.clipboard_append(sel)
+        return sel
+
+    def _clip_cut(self, w):
+        if self._clip_copy(w):
+            try:
+                w.delete("sel.first", "sel.last")
+            except Exception:
+                pass
+
+    def _clip_paste(self, w):
+        try:
+            s = self.clipboard_get()
+        except Exception:
+            return
+        # 메인 입력창 플레이스홀더가 떠 있으면 먼저 지운다
+        if w is getattr(self, "inp", None) and getattr(self, "_ph_active", False):
+            self._clear_ph()
+        try:
+            has_sel = w.tag_ranges("sel") if isinstance(w, tk.Text) else w.selection_present()
+            if has_sel:
+                w.delete("sel.first", "sel.last")
+        except Exception:
+            pass
+        try:
+            w.insert("insert", s)
+            if isinstance(w, tk.Text):
+                w.see("insert")
+        except Exception:
+            pass   # 비활성(state=disabled) 위젯 등
+
+    def _clip_all(self, w):
+        try:
+            if isinstance(w, tk.Text):
+                w.tag_add("sel", "1.0", "end-1c")
+            else:
+                w.select_range(0, "end")
+        except Exception:
+            pass
+
+    def _enable_clipboard(self, w):
+        # 마지막 포커스 편집창 기억 (메뉴 명령이 대상 위젯을 찾을 때 사용)
+        w.bind("<FocusIn>", lambda e: setattr(self, "_last_editable", e.widget), add="+")
+        # ⌘C/⌘V/⌘X/⌘A는 macOS aqua에서 <Command-c> 키가 아니라 가상이벤트로 전달된다
+        # (Windows는 Ctrl+… 가 같은 가상이벤트로 매핑). 그래서 가상이벤트에 직접 바인딩한다.
+        w.bind("<<Copy>>",      lambda e: (self._clip_copy(e.widget),  "break")[1])
+        w.bind("<<Cut>>",       lambda e: (self._clip_cut(e.widget),   "break")[1])
+        w.bind("<<Paste>>",     lambda e: (self._clip_paste(e.widget), "break")[1])
+        w.bind("<<SelectAll>>", lambda e: (self._clip_all(e.widget),   "break")[1])
+
+    # ── Edit 메뉴바 — macOS는 Command 단축키를 메뉴로 라우팅하므로 프로즌 앱에서도 확실히 동작 ──
+    def _menu_do(self, fn):
+        w = self._focused_editable()
+        if w is not None:
+            fn(w)
+
+    def _build_menubar(self):
+        menubar = tk.Menu(self)
+        editm = tk.Menu(menubar, tearoff=0)
+        # accelerator를 넣으면 aqua가 그 키를 메뉴 key-equivalent으로 '소비'해버려
+        # bind_all 단축키가 안 먹는다 → 단축키 힌트는 라벨 텍스트로만 표시(키는 bind_all이 처리)
+        editm.add_command(label="잘라내기    ⌘X",
+                          command=lambda: self._menu_do(self._clip_cut))
+        editm.add_command(label="복사    ⌘C",
+                          command=lambda: self._menu_do(self._clip_copy))
+        editm.add_command(label="붙여넣기    ⌘V",
+                          command=lambda: self._menu_do(self._clip_paste))
+        editm.add_separator()
+        editm.add_command(label="전체 선택    ⌘A",
+                          command=lambda: self._menu_do(self._clip_all))
+        menubar.add_cascade(label="편집", menu=editm)
+        self.config(menu=menubar)
+
+        # 전역 안전망: 가상이벤트를 앱 전체에 바인딩(개별 위젯 바인딩이 누락돼도 동작).
+        # macOS ⌘C/V/X/A·Windows Ctrl+C/V/X/A 모두 이 가상이벤트로 들어온다.
+        for ev, fn in (("<<Copy>>", self._clip_copy), ("<<Cut>>", self._clip_cut),
+                       ("<<Paste>>", self._clip_paste), ("<<SelectAll>>", self._clip_all)):
+            self.bind_all(ev, lambda e, f=fn: (self._menu_do(f), "break")[1])
+
+        # ★근본 원인 대응: 한글 등 비영문 입력소스에서는 macOS Tk가 ⌘C/V/X/A를
+        # 가상이벤트(<<Copy>> 등)로 변환하지 못한다(문자 매칭 실패 — 실측 로그로 확인).
+        # 그러나 원시 <Command-KeyPress> 이벤트에는 ASCII 문자(char='c' 등)가 실려
+        # 오므로 여기서 직접 디스패치한다. 영문 입력소스에서는 위 가상이벤트 경로가
+        # 먼저 "break"로 소비하므로 이중 실행되지 않는다.
+        if self.tk.call("tk", "windowingsystem") == "aqua":
+            self.bind_all("<Command-KeyPress>", self._on_cmd_key)
+
+    def _on_cmd_key(self, e):
+        ch = (e.char or "").lower()
+        if ch == "c":
+            self._menu_do(self._clip_copy)
+        elif ch == "v":
+            self._menu_do(self._clip_paste)
+        elif ch == "x":
+            self._menu_do(self._clip_cut)
+        elif ch == "a":
+            self._menu_do(self._clip_all)
+        else:
+            return None    # 그 외 ⌘조합(⌘Z·⌘Q·한글 조합 flush 등)은 정상 흐름 유지
         return "break"
 
     def _btn(self, parent, text, cmd, fg=C_TEXT, bg=C_BG2, hover="#21262d", font=None, pady=6, padx=10):
